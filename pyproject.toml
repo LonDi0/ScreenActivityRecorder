@@ -1,0 +1,22 @@
+[project]
+name = "screen-activity-agent"
+version = "0.1.0"
+description = "Local screen activity recording agent with a minimal PySide6 GUI."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "openai>=1.0.0",
+    "pillow>=10.0.0",
+    "pyside6>=6.6.0",
+    "python-dotenv>=1.0.0",
+    "tzdata>=2025.2",
+]
+
+[project.scripts]
+screen-agent-gui = "screen_activity_agent.gui:main"
+screen-agent-once = "screen_activity_agent.cli:main"
+screen-agent-diagnose = "screen_activity_agent.diagnose:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
