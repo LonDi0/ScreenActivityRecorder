@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from screen_activity_agent.models import ActivityRecord
-from screen_activity_agent.timeutil import date_key, minute_key, parse_iso
+from screen_activity_agent.timeutil import date_key, local_iso_for_date_minute, minute_key, parse_iso
 
 
 def _same_category(left: list[str], right: list[str]) -> bool:
@@ -114,13 +114,13 @@ class ActivityStorage:
         if last_seen_raw:
             last_seen = parse_iso(str(last_seen_raw))
         else:
-            last_seen = parse_iso(f"{event['date']}T{event.get('end', '00:00')}:00+08:00")
+            last_seen = parse_iso(local_iso_for_date_minute(event["date"], event.get("end", "00:00")))
 
         return current_ts - last_seen <= timedelta(seconds=self.merge_gap_seconds)
 
     @staticmethod
     def _duration_minutes(day: str, start: str, end: str) -> int:
-        start_ts = parse_iso(f"{day}T{start}:00+08:00")
-        end_ts = parse_iso(f"{day}T{end}:00+08:00")
+        start_ts = parse_iso(local_iso_for_date_minute(day, start))
+        end_ts = parse_iso(local_iso_for_date_minute(day, end))
         minutes = int((end_ts - start_ts).total_seconds() // 60)
         return max(1, minutes)

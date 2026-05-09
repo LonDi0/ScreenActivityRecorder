@@ -12,6 +12,11 @@ dependencies = [
     "tzdata>=2025.2",
 ]
 
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.0.0",
+]
+
 [project.scripts]
 screen-agent-gui = "screen_activity_agent.gui:main"
 screen-agent-once = "screen_activity_agent.cli:main"

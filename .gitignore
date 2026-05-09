@@ -4,4 +4,9 @@ __pycache__/
 *.pyc
 data/
 .tmp-check/
+.tmp-config-check/
+build/
+dist/
+*.spec
 .env
+api_profiles.json

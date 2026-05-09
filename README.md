@@ -1,6 +1,6 @@
 # 屏幕活动记录 Agent
 
-本项目是一个本地运行的屏幕活动记录 Agent。首版提供 PySide6 最小 GUI，支持手动识别一次、按间隔持续记录、暂停/停止、原始记录落盘和连续活动合并。
+本项目是一个本地运行的屏幕活动记录 Agent。首版提供 PySide6 最小 GUI，支持手动识别一次、按间隔持续记录、暂停、查看日志、原始记录落盘和连续活动合并。
 
 ## 环境变量
 
@@ -73,6 +73,42 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 .\run_gui.ps1
 .\run_once.ps1
 ```
+
+## 打包 EXE
+
+```powershell
+cd E:\myProject\recordAgent
+.\build_exe.ps1
+```
+
+生成文件：
+
+```text
+E:\myProject\recordAgent\dist\ScreenActivityAgent\ScreenActivityAgent.exe
+```
+
+运行 `.exe` 后会打开图形界面。如果同目录 `.env` 缺少 API Key、URL 或模型，程序会先进入“配置”页；配置完整后会进入正常界面。配置页可随时修改 API Key、URL、模型和截图间隔。
+
+配置页支持保存多套 API 配置：
+
+- 页面会显示当前正在应用的配置名称。
+- 点击“添加配置”会打开子页面，填写配置名称、API Key、URL、模型后点击“保存”。
+- 新增配置时配置名称不能重复，配置名称、API Key、URL 和模型都不能为空。
+- 点击每行的“修改”可以在原配置基础上编辑名称、API Key、URL 和模型；名称可以保持为当前配置名，但不能和其它配置重复。
+- 在配置列表里点击某套配置后的“应用”即可切换；当前配置会显示为绿色“已应用”。
+- “删除”只删除保存的配置档案，不删除历史记录。
+
+多配置档案保存在 `.env` 同目录的 `api_profiles.json`。
+
+修改 API Key、URL 或模型只影响后续识别请求，不会删除历史记录。历史数据默认保存在 `.env` 所在目录下的 `data/`，也可以通过 `SCREEN_AGENT_DATA_DIR` 固定到指定目录。
+
+如果你想把程序移动到别的文件夹，请移动整个目录：
+
+```text
+E:\myProject\recordAgent\dist\ScreenActivityAgent\
+```
+
+不要只移动单独的 `.exe`，因为 PyInstaller 目录模式还需要旁边的 `_internal` 运行库。配置文件和记录数据会保存在 `.exe` 所在目录下。
 
 Windows 控制台如果显示中文乱码，先切换 UTF-8：
 
