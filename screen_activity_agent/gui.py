@@ -143,6 +143,12 @@ QPushButton#primaryButton {
     color: #ffffff;
     font-weight: 600;
 }
+QPushButton#primaryButton:disabled {
+    background: #eef1f6;
+    color: #98a2b3;
+    border-color: #d8dee9;
+    font-weight: 600;
+}
 QPushButton#dangerButton {
     color: #b42318;
     border-color: #f1b4ad;
@@ -186,15 +192,34 @@ QStatusBar {
 }
 """
 
-CATEGORY_COLORS = [
-    "#1457d9",
-    "#0f9f8f",
-    "#9a5bdf",
-    "#d97706",
-    "#dc3f64",
-    "#2f6f4e",
-    "#64748b",
-    "#c2410c",
+CATEGORY_COLOR_MAP = {
+    "工作": "#238443",
+    "学习": "#2563eb",
+    "编程": "#7c3aed",
+    "写作": "#c026d3",
+    "阅读": "#0891b2",
+    "沟通": "#0f766e",
+    "会议": "#4f46e5",
+    "娱乐": "#db2777",
+    "游戏": "#ea580c",
+    "音乐": "#9333ea",
+    "购物": "#ca8a04",
+    "生活事务": "#65a30d",
+    "系统操作": "#64748b",
+    "空闲": "#94a3b8",
+    "未知": "#475569",
+    "隐私内容": "#166534",
+}
+
+FALLBACK_CATEGORY_COLORS = [
+    "#2563eb",
+    "#db2777",
+    "#ea580c",
+    "#7c3aed",
+    "#238443",
+    "#0891b2",
+    "#ca8a04",
+    "#475569",
 ]
 
 
@@ -340,7 +365,7 @@ class CategoryBarsWidget(QWidget):
         painter.setFont(font)
         for index, (name, minutes) in enumerate(items):
             y = top + index * row_h
-            color = QColor(CATEGORY_COLORS[index % len(CATEGORY_COLORS)])
+            color = _category_color(name, fallback_index=index)
             painter.setPen(QColor("#344054"))
             painter.drawText(8, y + 13, name[:12])
             painter.setPen(Qt.PenStyle.NoPen)
@@ -361,6 +386,136 @@ class CategoryBarsWidget(QWidget):
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                 f"{pct:.1f}%",
             )
+
+
+def _clock_minutes(value: Any) -> int | None:
+    text = str(value or "").strip()
+    if ":" not in text:
+        return None
+    hour_text, minute_text = text.split(":", 1)
+    try:
+        hour = int(hour_text)
+        minute = int(minute_text)
+    except ValueError:
+        return None
+    if hour == 24 and minute == 0:
+        return 24 * 60
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return hour * 60 + minute
+
+
+def _category_color(name: str, fallback_index: int | None = None) -> QColor:
+    normalized = str(name or "未知").strip() or "未知"
+    if normalized in CATEGORY_COLOR_MAP:
+        return QColor(CATEGORY_COLOR_MAP[normalized])
+    index = fallback_index
+    if index is None:
+        index = sum(ord(char) for char in normalized)
+    return QColor(FALLBACK_CATEGORY_COLORS[index % len(FALLBACK_CATEGORY_COLORS)])
+
+
+class TimelineChartWidget(QWidget):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.events: list[dict[str, Any]] = []
+        self.setMinimumHeight(150)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def set_events(self, events: list[dict[str, Any]]) -> None:
+        self.events = list(events)
+        self.update()
+
+    def _segments(self) -> list[tuple[int, int, dict[str, Any]]]:
+        segments: list[tuple[int, int, dict[str, Any]]] = []
+        for event in self.events:
+            start = _clock_minutes(event.get("start"))
+            end = _clock_minutes(event.get("end"))
+            if start is None:
+                continue
+            if end is None or end <= start:
+                duration = _event_minutes(event)
+                end = start + max(1, duration)
+            end = min(24 * 60, max(start + 1, end))
+            segments.append((start, end, event))
+        segments.sort(key=lambda item: (item[0], item[1]))
+        return segments
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.fillRect(self.rect(), QColor("#ffffff"))
+
+        segments = self._segments()
+        painter.setPen(QColor("#667085"))
+        if not segments:
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "暂无时间线数据")
+            return
+
+        span_start = min(start for start, _end, _event in segments)
+        span_end = max(end for _start, end, _event in segments)
+        if span_end <= span_start:
+            span_end = span_start + 1
+
+        left = 54
+        right = 28
+        top = 34
+        bar_h = 28
+        width = max(120, self.width() - left - right)
+        axis = QRectF(left, top, width, bar_h)
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#eef2f8"))
+        painter.drawRoundedRect(axis, 8, 8)
+
+        total_span = span_end - span_start
+        font = painter.font()
+        font.setPointSize(8)
+        painter.setFont(font)
+        metrics = painter.fontMetrics()
+
+        last_end = span_start
+        for start, end, item in segments:
+            if start > last_end:
+                gap_x = left + width * (last_end - span_start) / total_span
+                gap_w = width * (start - last_end) / total_span
+                painter.setBrush(QColor("#f6f8fc"))
+                painter.drawRoundedRect(QRectF(gap_x, top, gap_w, bar_h), 6, 6)
+            x = left + width * (start - span_start) / total_span
+            w = max(2.0, width * (end - start) / total_span)
+            primary = _category_primary(item.get("category"))
+            color = _category_color(primary)
+            painter.setBrush(color)
+            painter.drawRoundedRect(QRectF(x, top, w, bar_h), 6, 6)
+            if w >= 72:
+                label = metrics.elidedText(primary, Qt.TextElideMode.ElideRight, int(w - 10))
+                painter.setPen(QColor("#ffffff"))
+                painter.drawText(QRectF(x + 5, top, w - 10, bar_h), Qt.AlignmentFlag.AlignCenter, label)
+                painter.setPen(Qt.PenStyle.NoPen)
+            last_end = max(last_end, end)
+
+        painter.setPen(QColor("#667085"))
+        painter.drawText(8, top + 18, "时间")
+        start_label = f"{span_start // 60:02d}:{span_start % 60:02d}"
+        end_label = f"{span_end // 60:02d}:{span_end % 60:02d}"
+        painter.drawText(QRectF(left, top + bar_h + 8, 80, 18), Qt.AlignmentFlag.AlignLeft, start_label)
+        painter.drawText(QRectF(left + width - 80, top + bar_h + 8, 80, 18), Qt.AlignmentFlag.AlignRight, end_label)
+
+        totals = _category_totals(self.events)
+        legend_x = left
+        legend_y = top + bar_h + 38
+        for name, minutes in totals.most_common(5):
+            color = _category_color(name)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(color)
+            painter.drawRoundedRect(QRectF(legend_x, legend_y + 4, 10, 10), 3, 3)
+            painter.setPen(QColor("#475467"))
+            text = f"{name} {format_minutes(minutes)}"
+            text_w = min(150, metrics.horizontalAdvance(text) + 18)
+            painter.drawText(QRectF(legend_x + 16, legend_y, text_w, 18), Qt.AlignmentFlag.AlignVCenter, text)
+            legend_x += text_w + 18
+            if legend_x > self.width() - 170:
+                break
 
 
 def _mask_api_key(api_key: str) -> str:
@@ -599,6 +754,7 @@ class MainWindow(QMainWindow):
         self.thread: QThread | None = None
         self.worker: AgentWorker | None = None
         self.worker_busy = False
+        self._loading_settings_form = False
         self.profiles: list[ApiProfile] = []
         self.active_profile: str | None = None
 
@@ -756,6 +912,15 @@ class MainWindow(QMainWindow):
         self.timeline_table.setSortingEnabled(True)
         self.timeline_table.setMinimumHeight(460)
 
+        chart_panel = _panel()
+        chart_layout = QVBoxLayout(chart_panel)
+        chart_layout.setContentsMargins(18, 14, 18, 14)
+        chart_title = QLabel("时间分布")
+        chart_title.setObjectName("sectionTitle")
+        self.timeline_chart = TimelineChartWidget()
+        chart_layout.addWidget(chart_title)
+        chart_layout.addWidget(self.timeline_chart)
+
         content_panel = _panel()
         content_layout = QVBoxLayout(content_panel)
         content_layout.setContentsMargins(18, 14, 18, 14)
@@ -765,6 +930,7 @@ class MainWindow(QMainWindow):
         content_layout.addWidget(self.timeline_table, 1)
 
         layout.addWidget(toolbar)
+        layout.addWidget(chart_panel)
         layout.addWidget(content_panel, 1)
         self.refresh_timeline_button.clicked.connect(self.refresh_timeline)
         self.timeline_date.dateChanged.connect(self.refresh_timeline)
@@ -1024,8 +1190,10 @@ class MainWindow(QMainWindow):
         self.add_profile_button.setObjectName("primaryButton")
         self.profile_list_layout = QVBoxLayout()
         self.profile_list_layout.setSpacing(8)
-        self.save_settings_button = QPushButton("保存设置")
+        self.save_settings_button = QPushButton("保存运行设置")
         self.save_settings_button.setObjectName("primaryButton")
+        self.save_settings_button.setEnabled(False)
+        settings_layout.addWidget(self.save_settings_button)
         self.config_hint = QLabel(f"配置文件：{self.settings.env_path}")
         self.config_hint.setWordWrap(True)
         self.config_hint.setObjectName("muted")
@@ -1045,7 +1213,6 @@ class MainWindow(QMainWindow):
         footer_panel = _panel()
         footer_layout = QVBoxLayout(footer_panel)
         footer_layout.setContentsMargins(18, 14, 18, 14)
-        footer_layout.addWidget(self.save_settings_button)
         footer_layout.addWidget(self.config_hint)
         footer_layout.addWidget(self.data_hint)
 
@@ -1057,6 +1224,13 @@ class MainWindow(QMainWindow):
         self.browse_data_dir_button.clicked.connect(self.browse_data_dir)
         self.add_profile_button.clicked.connect(self.add_profile)
         self.save_settings_button.clicked.connect(self.save_settings)
+        self.interval_input.valueChanged.connect(self._update_running_settings_dirty)
+        self.data_dir_input.textChanged.connect(self._update_running_settings_dirty)
+        self.save_raw_screenshot_checkbox.stateChanged.connect(self._update_running_settings_dirty)
+        self.privacy_checkbox.stateChanged.connect(self._update_running_settings_dirty)
+        self.sensitive_filter_checkbox.stateChanged.connect(self._update_running_settings_dirty)
+        self.autostart_checkbox.stateChanged.connect(self._update_running_settings_dirty)
+        self._load_running_settings_form()
         self.tabs.addTab(self.settings_tab, "配置")
 
     def _start_worker(self) -> None:
@@ -1119,6 +1293,40 @@ class MainWindow(QMainWindow):
         self.base_url_label.setText(
             f"API Base URL：{self.settings.base_url if self.settings.has_base_url_config else '未配置'}"
         )
+
+    def _load_running_settings_form(self) -> None:
+        self._loading_settings_form = True
+        try:
+            self.interval_input.setValue(self.settings.interval_seconds)
+            self.data_dir_input.setText(str(self.settings.data_dir))
+            self.save_raw_screenshot_checkbox.setChecked(self.settings.save_raw_screenshot)
+            self.privacy_checkbox.setChecked(self.settings.privacy_protection_enabled)
+            self.sensitive_filter_checkbox.setChecked(self.settings.sensitive_content_filter_enabled)
+            self.autostart_checkbox.setChecked(self.settings.autostart_enabled)
+        finally:
+            self._loading_settings_form = False
+        self._update_running_settings_dirty()
+
+    def _running_settings_dirty(self) -> bool:
+        data_dir_text = self.data_dir_input.text().strip()
+        current_data_dir = str(self.settings.data_dir)
+        try:
+            data_dir_dirty = bool(data_dir_text) and Path(data_dir_text).expanduser().resolve() != self.settings.data_dir.resolve()
+        except OSError:
+            data_dir_dirty = data_dir_text != current_data_dir
+        return (
+            self.interval_input.value() != self.settings.interval_seconds
+            or data_dir_dirty
+            or self.save_raw_screenshot_checkbox.isChecked() != self.settings.save_raw_screenshot
+            or self.privacy_checkbox.isChecked() != self.settings.privacy_protection_enabled
+            or self.sensitive_filter_checkbox.isChecked() != self.settings.sensitive_content_filter_enabled
+            or self.autostart_checkbox.isChecked() != self.settings.autostart_enabled
+        )
+
+    def _update_running_settings_dirty(self, *_args: Any) -> None:
+        if self._loading_settings_form:
+            return
+        self.save_settings_button.setEnabled(self._running_settings_dirty())
 
     def refresh_dashboard_summary(self) -> None:
         date_text = QDate.currentDate().toString("yyyy-MM-dd")
@@ -1245,11 +1453,10 @@ class MainWindow(QMainWindow):
             return
         upsert_api_profile(self.settings.env_path, updated, make_active=was_active)
         if was_active:
-            applied = self._apply_values(
+            applied = self._apply_api_values(
                 api_key=updated.api_key,
                 base_url=updated.base_url,
                 model=updated.model,
-                interval_seconds=self.interval_input.value(),
                 active_profile=updated.name,
             )
             if not applied:
@@ -1259,11 +1466,10 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"API 配置已修改：{updated.name}")
 
     def apply_profile(self, profile: ApiProfile) -> None:
-        applied = self._apply_values(
+        applied = self._apply_api_values(
             api_key=profile.api_key,
             base_url=profile.base_url,
             model=profile.model,
-            interval_seconds=self.interval_input.value(),
             active_profile=profile.name,
         )
         if applied:
@@ -1285,29 +1491,42 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def save_settings(self) -> None:
-        api_key = (self.settings.api_key or "").strip()
-        base_url = self.settings.base_url.strip()
-        model = self.settings.model.strip()
-        if not api_key or not base_url or not model:
-            QMessageBox.warning(self, "配置不完整", "请先添加并应用一个完整的 API 配置。")
-            return
-        applied = self._apply_values(
-            api_key=api_key,
-            base_url=base_url,
-            model=model,
-            interval_seconds=self.interval_input.value(),
-            active_profile=self.active_profile,
-        )
+        applied = self._save_running_settings()
         if applied:
-            QMessageBox.information(self, "设置已保存", "设置已保存，新的记录任务会使用最新配置。")
+            QMessageBox.information(self, "运行设置已保存", "运行设置已保存，新的记录任务会使用最新配置。")
 
-    def _apply_values(
+    def _write_current_settings(
         self,
         *,
         api_key: str,
         base_url: str,
         model: str,
         interval_seconds: int,
+        data_dir: str | Path,
+        save_raw_screenshot: bool,
+        privacy_protection_enabled: bool,
+        sensitive_content_filter_enabled: bool,
+        autostart_enabled: bool,
+    ) -> None:
+        save_settings_to_env(
+            env_path=self.settings.env_path,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            interval_seconds=interval_seconds,
+            data_dir=data_dir,
+            save_raw_screenshot=save_raw_screenshot,
+            privacy_protection_enabled=privacy_protection_enabled,
+            sensitive_content_filter_enabled=sensitive_content_filter_enabled,
+            autostart_enabled=autostart_enabled,
+        )
+
+    def _apply_api_values(
+        self,
+        *,
+        api_key: str,
+        base_url: str,
+        model: str,
         active_profile: str | None,
     ) -> bool:
         if self.worker_busy:
@@ -1317,36 +1536,60 @@ class MainWindow(QMainWindow):
                 "当前 API 请求尚未结束，暂时不能切换配置。请等待本次识别超时或返回错误后再切换。",
             )
             return False
-        save_settings_to_env(
-            env_path=self.settings.env_path,
+        self._write_current_settings(
             api_key=api_key,
             base_url=base_url,
             model=model,
-            interval_seconds=interval_seconds,
+            interval_seconds=self.settings.interval_seconds,
+            data_dir=self.settings.data_dir,
+            save_raw_screenshot=self.settings.save_raw_screenshot,
+            privacy_protection_enabled=self.settings.privacy_protection_enabled,
+            sensitive_content_filter_enabled=self.settings.sensitive_content_filter_enabled,
+            autostart_enabled=self.settings.autostart_enabled,
+        )
+        if active_profile:
+            profiles, _active = load_api_profiles(self.settings.env_path)
+            save_api_profiles(self.settings.env_path, profiles, active_profile)
+        self._reload_settings_after_save(reset_form=True)
+        self.statusBar().showMessage("API 配置已应用。")
+        return True
+
+    def _save_running_settings(self) -> bool:
+        if not self.settings.is_complete:
+            QMessageBox.warning(self, "配置不完整", "请先添加并应用一个完整的 API 配置。")
+            return False
+        if self.worker_busy:
+            QMessageBox.warning(
+                self,
+                "正在识别",
+                "当前 API 请求尚未结束，暂时不能保存运行设置。请等待本次识别超时或返回错误后再保存。",
+            )
+            return False
+        self._write_current_settings(
+            api_key=self.settings.api_key or "",
+            base_url=self.settings.base_url,
+            model=self.settings.model,
+            interval_seconds=self.interval_input.value(),
             data_dir=self.data_dir_input.text().strip() or self.settings.data_dir,
             save_raw_screenshot=self.save_raw_screenshot_checkbox.isChecked(),
             privacy_protection_enabled=self.privacy_checkbox.isChecked(),
             sensitive_content_filter_enabled=self.sensitive_filter_checkbox.isChecked(),
             autostart_enabled=self.autostart_checkbox.isChecked(),
         )
-        if active_profile:
-            profiles, _active = load_api_profiles(self.settings.env_path)
-            save_api_profiles(self.settings.env_path, profiles, active_profile)
+        self._reload_settings_after_save(reset_form=True)
+        self.statusBar().showMessage("运行设置已保存。")
+        return True
+
+    def _reload_settings_after_save(self, *, reset_form: bool) -> None:
         self.settings = load_settings(self.settings.env_path.parent)
         self.config_hint.setText(f"配置文件：{self.settings.env_path}")
         self.data_hint.setText(f"数据目录：{self.settings.data_dir}")
-        self.interval_input.setValue(self.settings.interval_seconds)
-        self.data_dir_input.setText(str(self.settings.data_dir))
-        self.save_raw_screenshot_checkbox.setChecked(self.settings.save_raw_screenshot)
-        self.privacy_checkbox.setChecked(self.settings.privacy_protection_enabled)
-        self.sensitive_filter_checkbox.setChecked(self.settings.sensitive_content_filter_enabled)
-        self.autostart_checkbox.setChecked(self.settings.autostart_enabled)
+        if reset_form:
+            self._load_running_settings_form()
         self.refresh_config_labels()
         self.reload_profiles()
         self.refresh_all_data_views()
         self._restart_worker()
-        self.statusBar().showMessage("设置已保存。")
-        return True
 
     @Slot()
     def refresh_logs(self) -> None:
@@ -1359,6 +1602,7 @@ class MainWindow(QMainWindow):
         category = self.timeline_category.currentText()
         self._refresh_category_filter(self.timeline_category, date_text)
         events = filter_items_by_category(load_events(self.settings.data_dir, date_text), category)
+        self.timeline_chart.set_events(events)
         self._populate_timeline_table(events)
 
     @Slot()
