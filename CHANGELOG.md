@@ -69,6 +69,8 @@
 - 保留中文 `RELEASE.md` 作为发布说明，面向下载 release 的普通用户。
 - README 末尾新增中英文项目声明，包含项目名称、作者和作者单位。
 - RELEASE 下载说明新增 release 页面链接，方便用户直接跳转下载 Windows 压缩包。
+- README 下载说明新增 Releases 页面链接，方便用户直接跳转下载 Windows 压缩包。
+- AGENTS.md 中的 OpenAI SDK 示例 Base URL 改为 OpenAI 官方地址 `https://api.openai.com/v1`。
 
 ### 修复
 

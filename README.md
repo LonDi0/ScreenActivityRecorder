@@ -45,7 +45,7 @@ ScreenActivityRecorder 可以帮助你回答这些问题：
 
 普通用户建议直接下载 Release 包，不需要安装 Python。
 
-1. 打开 GitHub 的 Releases 页面。
+1. 打开 GitHub 的 [Releases 页面](https://github.com/LonDi0/ScreenActivityRecorder/releases/tag/v0.1.0)。
 2. 下载 `ScreenActivityRecorder-v0.1.0-windows.zip`。
 3. 解压整个压缩包。
 4. 双击 `ScreenActivityAgent.exe`。
