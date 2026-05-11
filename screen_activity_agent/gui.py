@@ -327,9 +327,9 @@ class CategoryBarsWidget(QWidget):
 
         items = self.totals.most_common(6)
         left = 96
-        minutes_col = 86
+        minutes_col = 118
         percent_col = 58
-        right = minutes_col + percent_col + 18
+        right = minutes_col + percent_col + 28
         top = 18
         row_h = 25
         bar_h = 9
@@ -357,7 +357,7 @@ class CategoryBarsWidget(QWidget):
                 format_minutes(minutes),
             )
             painter.drawText(
-                QRectF(left + width + minutes_col, y, percent_col, row_h),
+                QRectF(left + width + minutes_col + 10, y, percent_col, row_h),
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                 f"{pct:.1f}%",
             )
