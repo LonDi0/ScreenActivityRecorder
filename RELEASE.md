@@ -8,7 +8,7 @@ ScreenActivityRecorder 是一个本地屏幕活动记录工具。它会定时识
 
 ## 下载和运行
 
-1. 下载 `ScreenActivityRecorder-v0.1.0-windows.zip`。
+1. 在 [release](https://github.com/LonDi0/ScreenActivityRecorder/releases/tag/v0.1.0) 中下载 `ScreenActivityRecorder-v0.1.0-windows.zip`。
 2. 解压整个压缩包。
 3. 双击 `ScreenActivityAgent.exe`。
 4. 首次启动后，在“配置”页面添加 API 配置。
