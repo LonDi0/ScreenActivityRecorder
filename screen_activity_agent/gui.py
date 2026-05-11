@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 import sys
+from collections import Counter
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QDate, QObject, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QDate, QObject, QRectF, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -15,6 +18,8 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -23,6 +28,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QPlainTextEdit,
+    QSizePolicy,
     QSpinBox,
     QStatusBar,
     QTabWidget,
@@ -63,6 +69,310 @@ from screen_activity_agent.models import ActivityRecord
 from screen_activity_agent.reports import render_report_text
 
 
+APP_STYLESHEET = """
+QMainWindow, QDialog {
+    background: #f4f6fb;
+    color: #172033;
+    font-family: "Microsoft YaHei UI", "Segoe UI";
+    font-size: 13px;
+}
+QTabWidget::pane {
+    border: 0;
+    background: #f4f6fb;
+}
+QTabBar::tab {
+    background: transparent;
+    color: #667085;
+    padding: 11px 16px;
+    margin: 4px 2px 0 2px;
+    border-radius: 6px;
+}
+QTabBar::tab:selected {
+    background: #ffffff;
+    color: #1457d9;
+    font-weight: 600;
+}
+QFrame#panel {
+    background: #ffffff;
+    border: 1px solid #e4e8f0;
+    border-radius: 8px;
+}
+QLabel#pageTitle {
+    color: #111827;
+    font-size: 22px;
+    font-weight: 700;
+}
+QLabel#sectionTitle {
+    color: #172033;
+    font-size: 15px;
+    font-weight: 700;
+}
+QLabel#muted {
+    color: #667085;
+}
+QLabel#metricValue {
+    color: #111827;
+    font-size: 22px;
+    font-weight: 700;
+}
+QLabel#metricTitle {
+    color: #667085;
+    font-size: 12px;
+}
+QLabel#statusPill {
+    background: #eef4ff;
+    color: #1457d9;
+    border: 1px solid #c7d7fe;
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-weight: 600;
+}
+QPushButton {
+    background: #ffffff;
+    border: 1px solid #cfd7e6;
+    border-radius: 6px;
+    padding: 7px 12px;
+    color: #172033;
+}
+QPushButton:hover {
+    background: #f8fbff;
+    border-color: #9eb4dc;
+}
+QPushButton#primaryButton {
+    background: #1457d9;
+    border-color: #1457d9;
+    color: #ffffff;
+    font-weight: 600;
+}
+QPushButton#dangerButton {
+    color: #b42318;
+    border-color: #f1b4ad;
+}
+QPushButton:disabled {
+    background: #eef1f6;
+    color: #98a2b3;
+    border-color: #d8dee9;
+}
+QLineEdit, QSpinBox, QDateEdit, QComboBox {
+    background: #ffffff;
+    border: 1px solid #cfd7e6;
+    border-radius: 6px;
+    min-height: 30px;
+    padding: 2px 8px;
+}
+QPlainTextEdit, QTableWidget {
+    background: #ffffff;
+    border: 1px solid #e4e8f0;
+    border-radius: 8px;
+    color: #172033;
+    selection-background-color: #dbe8ff;
+    selection-color: #111827;
+}
+QTableWidget {
+    gridline-color: #edf0f5;
+    alternate-background-color: #f9fbff;
+}
+QHeaderView::section {
+    background: #f6f8fc;
+    color: #475467;
+    border: 0;
+    border-bottom: 1px solid #e4e8f0;
+    padding: 8px;
+    font-weight: 600;
+}
+QStatusBar {
+    background: #ffffff;
+    color: #667085;
+    border-top: 1px solid #e4e8f0;
+}
+"""
+
+CATEGORY_COLORS = [
+    "#1457d9",
+    "#0f9f8f",
+    "#9a5bdf",
+    "#d97706",
+    "#dc3f64",
+    "#2f6f4e",
+    "#64748b",
+    "#c2410c",
+]
+
+
+def _category_primary(category: Any) -> str:
+    if isinstance(category, list) and category and str(category[0]).strip():
+        return str(category[0]).strip()
+    return "未知"
+
+
+def _event_minutes(event: dict[str, Any]) -> int:
+    try:
+        return max(0, int(event.get("duration_minutes", 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _category_totals(events: list[dict[str, Any]]) -> Counter[str]:
+    totals: Counter[str] = Counter()
+    for event in events:
+        minutes = _event_minutes(event)
+        if minutes > 0:
+            totals[_category_primary(event.get("category"))] += minutes
+    return totals
+
+
+def _summary_for_date(data_dir: Path, date_text: str) -> tuple[int, Counter[str], int]:
+    events = load_events(data_dir, date_text)
+    totals = _category_totals(events)
+    return sum(totals.values()), totals, len(events)
+
+
+def _period_bounds(anchor: date, period: str) -> tuple[date, date]:
+    if period == "day":
+        return anchor, anchor
+    if period == "week":
+        start = anchor - timedelta(days=anchor.weekday())
+        return start, start + timedelta(days=6)
+    if period == "month":
+        start = anchor.replace(day=1)
+        if anchor.month == 12:
+            end = date(anchor.year + 1, 1, 1) - timedelta(days=1)
+        else:
+            end = date(anchor.year, anchor.month + 1, 1) - timedelta(days=1)
+        return start, end
+    if period == "last7":
+        return anchor - timedelta(days=6), anchor
+    if period == "last30":
+        return anchor - timedelta(days=29), anchor
+    return anchor, anchor
+
+
+def _iter_dates(start: date, end: date):
+    current = start
+    while current <= end:
+        yield current
+        current += timedelta(days=1)
+
+
+def _period_events(data_dir: Path, anchor: date, period: str) -> list[dict[str, Any]]:
+    start, end = _period_bounds(anchor, period)
+    events: list[dict[str, Any]] = []
+    for current in _iter_dates(start, end):
+        events.extend(load_events(data_dir, current.isoformat()))
+    return events
+
+
+def _panel(*, margins: tuple[int, int, int, int] = (18, 16, 18, 16)) -> QFrame:
+    frame = QFrame()
+    frame.setObjectName("panel")
+    frame.setFrameShape(QFrame.Shape.NoFrame)
+    frame.setContentsMargins(*margins)
+    return frame
+
+
+def _page_title(title: str, subtitle: str = "") -> tuple[QWidget, QLabel]:
+    widget = QWidget()
+    layout = QVBoxLayout(widget)
+    layout.setContentsMargins(0, 0, 0, 4)
+    layout.setSpacing(3)
+    title_label = QLabel(title)
+    title_label.setObjectName("pageTitle")
+    layout.addWidget(title_label)
+    subtitle_label = QLabel(subtitle)
+    subtitle_label.setObjectName("muted")
+    subtitle_label.setWordWrap(True)
+    layout.addWidget(subtitle_label)
+    return widget, subtitle_label
+
+
+def _metric_card(title: str, value: str = "-", accent: str = "#1457d9") -> tuple[QFrame, QLabel]:
+    frame = _panel(margins=(14, 12, 14, 12))
+    layout = QVBoxLayout(frame)
+    layout.setContentsMargins(14, 12, 14, 12)
+    layout.setSpacing(5)
+    title_label = QLabel(title)
+    title_label.setObjectName("metricTitle")
+    value_label = QLabel(value)
+    value_label.setObjectName("metricValue")
+    value_label.setWordWrap(True)
+    accent_line = QFrame()
+    accent_line.setFixedHeight(3)
+    accent_line.setStyleSheet(f"background: {accent}; border-radius: 2px;")
+    layout.addWidget(title_label)
+    layout.addWidget(value_label)
+    layout.addStretch(1)
+    layout.addWidget(accent_line)
+    return frame, value_label
+
+
+class CategoryBarsWidget(QWidget):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.totals: Counter[str] = Counter()
+        self.setMinimumHeight(190)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def set_totals(self, totals: Counter[str]) -> None:
+        self.totals = Counter({name: minutes for name, minutes in totals.items() if minutes > 0})
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.fillRect(self.rect(), QColor("#ffffff"))
+        total = sum(self.totals.values())
+        painter.setPen(QColor("#667085"))
+        if total <= 0:
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "暂无统计数据")
+            return
+
+        items = self.totals.most_common(6)
+        left = 96
+        minutes_col = 86
+        percent_col = 58
+        right = minutes_col + percent_col + 18
+        top = 18
+        row_h = 25
+        bar_h = 9
+        max_value = max(minutes for _name, minutes in items)
+        width = max(80, self.width() - left - right)
+        font = painter.font()
+        font.setPointSize(9)
+        painter.setFont(font)
+        for index, (name, minutes) in enumerate(items):
+            y = top + index * row_h
+            color = QColor(CATEGORY_COLORS[index % len(CATEGORY_COLORS)])
+            painter.setPen(QColor("#344054"))
+            painter.drawText(8, y + 13, name[:12])
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor("#eef2f8"))
+            painter.drawRoundedRect(QRectF(left, y + 5, width, bar_h), 4, 4)
+            bar_w = width * minutes / max_value if max_value else 0
+            painter.setBrush(color)
+            painter.drawRoundedRect(QRectF(left, y + 5, bar_w, bar_h), 4, 4)
+            painter.setPen(QColor("#667085"))
+            pct = minutes * 100 / total
+            painter.drawText(
+                QRectF(left + width + 10, y, minutes_col - 10, row_h),
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                format_minutes(minutes),
+            )
+            painter.drawText(
+                QRectF(left + width + minutes_col, y, percent_col, row_h),
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                f"{pct:.1f}%",
+            )
+
+
+def _mask_api_key(api_key: str) -> str:
+    key = api_key.strip()
+    if not key:
+        return "未填写"
+    if len(key) <= 10:
+        return f"{key[:2]}...{key[-2:]}"
+    return f"{key[:6]}...{key[-4:]}"
+
+
 class ProfileDialog(QDialog):
     def __init__(
         self,
@@ -82,18 +392,32 @@ class ProfileDialog(QDialog):
         form = QFormLayout()
         self.name_input = QLineEdit()
         self.api_key_input = QLineEdit()
-        self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.api_key_input.setReadOnly(profile is not None)
         self.base_url_input = QLineEdit()
         self.model_input = QLineEdit()
+        self._api_key_value = profile.api_key if profile else ""
+        if profile is None:
+            self.api_key_input.setPlaceholderText("输入完整 API Key")
 
         if profile:
             self.name_input.setText(profile.name)
-            self.api_key_input.setText(profile.api_key)
+            self.api_key_input.setText(_mask_api_key(profile.api_key))
             self.base_url_input.setText(profile.base_url)
             self.model_input.setText(profile.model)
 
+        self.copy_api_key_button = QPushButton("复制")
+        self.copy_api_key_button.clicked.connect(self.copy_api_key)
+        self.change_api_key_button = QPushButton("更换")
+        self.change_api_key_button.clicked.connect(self.enable_api_key_edit)
+        api_key_row = QHBoxLayout()
+        api_key_row.addWidget(self.api_key_input, 1)
+        api_key_row.addWidget(self.copy_api_key_button)
+        api_key_row.addWidget(self.change_api_key_button)
+        self.copy_api_key_button.setEnabled(bool(self._api_key_value))
+        self.change_api_key_button.setEnabled(profile is not None)
+
         form.addRow("配置名称", self.name_input)
-        form.addRow("OPENAI_API_KEY", self.api_key_input)
+        form.addRow("OPENAI_API_KEY", api_key_row)
         form.addRow("API Base URL", self.base_url_input)
         form.addRow("模型", self.model_input)
 
@@ -109,6 +433,8 @@ class ProfileDialog(QDialog):
     def validate_and_accept(self) -> None:
         name = self.name_input.text().strip()
         api_key = self.api_key_input.text().strip()
+        if self._api_key_value:
+            api_key = self._api_key_value
         base_url = self.base_url_input.text().strip()
         model = self.model_input.text().strip()
         if not name or not api_key or not base_url or not model:
@@ -123,10 +449,27 @@ class ProfileDialog(QDialog):
     def profile(self) -> ApiProfile:
         return ApiProfile(
             name=self.name_input.text().strip(),
-            api_key=self.api_key_input.text().strip(),
+            api_key=self._api_key_value or self.api_key_input.text().strip(),
             base_url=self.base_url_input.text().strip(),
             model=self.model_input.text().strip(),
         )
+
+    @Slot()
+    def copy_api_key(self) -> None:
+        if not self._api_key_value:
+            QMessageBox.information(self, "没有 API Key", "当前配置没有可复制的 API Key。")
+            return
+        QApplication.clipboard().setText(self._api_key_value)
+        QMessageBox.information(self, "已复制", "完整 API Key 已复制到剪贴板。")
+
+    @Slot()
+    def enable_api_key_edit(self) -> None:
+        self._api_key_value = ""
+        self.api_key_input.clear()
+        self.api_key_input.setReadOnly(False)
+        self.api_key_input.setPlaceholderText("输入新的完整 API Key")
+        self.copy_api_key_button.setEnabled(False)
+        self.api_key_input.setFocus()
 
 
 class EventEditDialog(QDialog):
@@ -239,8 +582,10 @@ class MainWindow(QMainWindow):
         self.active_profile: str | None = None
 
         self.setWindowTitle("屏幕活动记录 Agent")
-        self.resize(1080, 760)
-        self.setStatusBar(QStatusBar())
+        self.resize(1180, 800)
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+        self.setStyleSheet(APP_STYLESHEET)
 
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
@@ -264,8 +609,14 @@ class MainWindow(QMainWindow):
     def _build_dashboard_tab(self) -> None:
         self.dashboard_tab = QWidget()
         layout = QVBoxLayout(self.dashboard_tab)
+        layout.setContentsMargins(18, 16, 18, 18)
+        layout.setSpacing(14)
+
+        header, _subtitle = _page_title("首页", "查看运行状态、今日记录概览和最近一次识别结果。")
+        layout.addWidget(header)
 
         self.status_label = QLabel("状态：已暂停")
+        self.status_label.setObjectName("statusPill")
         self.key_label = QLabel()
         self.model_label = QLabel()
         self.base_url_label = QLabel()
@@ -276,11 +627,50 @@ class MainWindow(QMainWindow):
         self.today_share_label = QLabel("今日主要分类占比：暂无记录")
         self.today_share_label.setWordWrap(True)
 
+        metric_row = QGridLayout()
+        metric_row.setHorizontalSpacing(12)
+        self.status_card, self.status_value = _metric_card("运行状态", "已暂停", "#1457d9")
+        self.duration_card, self.duration_value = _metric_card("今日已记录", "0 分钟", "#0f9f8f")
+        self.main_category_card, self.main_category_value = _metric_card("今日主要分类", "暂无记录", "#9a5bdf")
+        self.last_seen_card, self.last_seen_value = _metric_card("最近识别", "无", "#d97706")
+        metric_row.addWidget(self.status_card, 0, 0)
+        metric_row.addWidget(self.duration_card, 0, 1)
+        metric_row.addWidget(self.main_category_card, 0, 2)
+        metric_row.addWidget(self.last_seen_card, 0, 3)
+        layout.addLayout(metric_row)
+
+        config_panel = _panel()
+        config_layout = QGridLayout(config_panel)
+        config_layout.setContentsMargins(18, 14, 18, 14)
+        config_layout.setHorizontalSpacing(18)
+        config_layout.setVerticalSpacing(8)
+        config_layout.addWidget(QLabel("运行信息"), 0, 0)
+        config_layout.itemAtPosition(0, 0).widget().setObjectName("sectionTitle")
+        config_layout.addWidget(self.status_label, 0, 1)
+        config_layout.addWidget(self.key_label, 1, 0)
+        config_layout.addWidget(self.model_label, 1, 1)
+        config_layout.addWidget(self.base_url_label, 1, 2)
+        config_layout.addWidget(self.last_time_label, 2, 0)
+        config_layout.addWidget(self.current_label, 2, 1, 1, 2)
+        config_layout.addWidget(self.today_duration_label, 3, 0)
+        config_layout.addWidget(self.today_share_label, 3, 1, 1, 2)
+
+        chart_panel = _panel()
+        chart_layout = QVBoxLayout(chart_panel)
+        chart_layout.setContentsMargins(18, 14, 18, 14)
+        chart_title = QLabel("今日分类占比")
+        chart_title.setObjectName("sectionTitle")
+        self.dashboard_bars = CategoryBarsWidget()
+        chart_layout.addWidget(chart_title)
+        chart_layout.addWidget(self.dashboard_bars)
+
         self.result_text = QPlainTextEdit()
         self.result_text.setReadOnly(True)
         self.result_text.setPlaceholderText("识别结果会显示在这里。")
+        self.result_text.setMinimumHeight(180)
 
         self.start_button = QPushButton("开始记录")
+        self.start_button.setObjectName("primaryButton")
         self.pause_button = QPushButton("暂停")
         self.once_button = QPushButton("手动识别一次")
 
@@ -289,19 +679,18 @@ class MainWindow(QMainWindow):
             button_row.addWidget(button)
         button_row.addStretch(1)
 
-        for widget in (
-            self.status_label,
-            self.key_label,
-            self.model_label,
-            self.base_url_label,
-            self.last_time_label,
-            self.current_label,
-            self.today_duration_label,
-            self.today_share_label,
-        ):
-            layout.addWidget(widget)
+        result_panel = _panel()
+        result_layout = QVBoxLayout(result_panel)
+        result_layout.setContentsMargins(18, 14, 18, 14)
+        result_title = QLabel("最近一次识别结果")
+        result_title.setObjectName("sectionTitle")
+        result_layout.addWidget(result_title)
+        result_layout.addWidget(self.result_text, 1)
+
+        layout.addWidget(config_panel)
+        layout.addWidget(chart_panel)
         layout.addLayout(button_row)
-        layout.addWidget(self.result_text, 1)
+        layout.addWidget(result_panel, 1)
 
         self.start_button.clicked.connect(self._start_clicked)
         self.pause_button.clicked.connect(self.pause_requested.emit)
@@ -311,8 +700,15 @@ class MainWindow(QMainWindow):
     def _build_timeline_tab(self) -> None:
         self.timeline_tab = QWidget()
         layout = QVBoxLayout(self.timeline_tab)
+        layout.setContentsMargins(18, 16, 18, 18)
+        layout.setSpacing(14)
 
+        header, _subtitle = _page_title("时间线", "按日期和分类查看合并后的活动记录。")
+        layout.addWidget(header)
+
+        toolbar = _panel(margins=(12, 10, 12, 10))
         row = QHBoxLayout()
+        row.setContentsMargins(12, 8, 12, 8)
         self.timeline_date = QDateEdit()
         self.timeline_date.setCalendarPopup(True)
         self.timeline_date.setDate(QDate.currentDate())
@@ -325,13 +721,23 @@ class MainWindow(QMainWindow):
         row.addWidget(self.timeline_category)
         row.addWidget(self.refresh_timeline_button)
         row.addStretch(1)
+        toolbar.setLayout(row)
 
         self.timeline_text = QPlainTextEdit()
         self.timeline_text.setReadOnly(True)
         self.timeline_text.setPlaceholderText("这里展示所选日期的完整时间线。")
+        self.timeline_text.setMinimumHeight(460)
 
-        layout.addLayout(row)
-        layout.addWidget(self.timeline_text, 1)
+        content_panel = _panel()
+        content_layout = QVBoxLayout(content_panel)
+        content_layout.setContentsMargins(18, 14, 18, 14)
+        content_title = QLabel("完整时间线")
+        content_title.setObjectName("sectionTitle")
+        content_layout.addWidget(content_title)
+        content_layout.addWidget(self.timeline_text, 1)
+
+        layout.addWidget(toolbar)
+        layout.addWidget(content_panel, 1)
         self.refresh_timeline_button.clicked.connect(self.refresh_timeline)
         self.timeline_date.dateChanged.connect(self.refresh_timeline)
         self.timeline_category.currentTextChanged.connect(self.refresh_timeline)
@@ -340,8 +746,15 @@ class MainWindow(QMainWindow):
     def _build_statistics_tab(self) -> None:
         self.statistics_tab = QWidget()
         layout = QVBoxLayout(self.statistics_tab)
+        layout.setContentsMargins(18, 16, 18, 18)
+        layout.setSpacing(14)
 
+        header, _subtitle = _page_title("统计", "查看日、周、月以及滚动周期的分类占比和主要活动。")
+        layout.addWidget(header)
+
+        toolbar = _panel(margins=(12, 10, 12, 10))
         row = QHBoxLayout()
+        row.setContentsMargins(12, 8, 12, 8)
         self.statistics_date = QDateEdit()
         self.statistics_date.setCalendarPopup(True)
         self.statistics_date.setDate(QDate.currentDate())
@@ -354,12 +767,42 @@ class MainWindow(QMainWindow):
         row.addWidget(self.statistics_period)
         row.addWidget(self.refresh_statistics_button)
         row.addStretch(1)
+        toolbar.setLayout(row)
+
+        summary_row = QGridLayout()
+        summary_row.setHorizontalSpacing(12)
+        self.stat_total_card, self.stat_total_value = _metric_card("总记录时长", "0 分钟", "#1457d9")
+        self.stat_top_card, self.stat_top_value = _metric_card("占比最高分类", "暂无记录", "#0f9f8f")
+        self.stat_unknown_card, self.stat_unknown_value = _metric_card("未知占比", "0.0%", "#d97706")
+        summary_row.addWidget(self.stat_total_card, 0, 0)
+        summary_row.addWidget(self.stat_top_card, 0, 1)
+        summary_row.addWidget(self.stat_unknown_card, 0, 2)
+
+        chart_panel = _panel()
+        chart_layout = QVBoxLayout(chart_panel)
+        chart_layout.setContentsMargins(18, 14, 18, 14)
+        chart_title = QLabel("分类占比图")
+        chart_title.setObjectName("sectionTitle")
+        self.statistics_bars = CategoryBarsWidget()
+        chart_layout.addWidget(chart_title)
+        chart_layout.addWidget(self.statistics_bars)
 
         self.statistics_text = QPlainTextEdit()
         self.statistics_text.setReadOnly(True)
+        self.statistics_text.setMinimumHeight(260)
 
-        layout.addLayout(row)
-        layout.addWidget(self.statistics_text, 1)
+        report_panel = _panel()
+        report_layout = QVBoxLayout(report_panel)
+        report_layout.setContentsMargins(18, 14, 18, 14)
+        report_title = QLabel("文本报表")
+        report_title.setObjectName("sectionTitle")
+        report_layout.addWidget(report_title)
+        report_layout.addWidget(self.statistics_text, 1)
+
+        layout.addWidget(toolbar)
+        layout.addLayout(summary_row)
+        layout.addWidget(chart_panel)
+        layout.addWidget(report_panel, 1)
         self.refresh_statistics_button.clicked.connect(self.refresh_statistics)
         self.statistics_date.dateChanged.connect(self.refresh_statistics)
         self.statistics_period.currentTextChanged.connect(self.refresh_statistics)
@@ -368,8 +811,15 @@ class MainWindow(QMainWindow):
     def _build_records_tab(self) -> None:
         self.records_tab = QWidget()
         layout = QVBoxLayout(self.records_tab)
+        layout.setContentsMargins(18, 16, 18, 18)
+        layout.setSpacing(14)
 
+        header, _subtitle = _page_title("记录管理", "查看、编辑、删除和导出本地记录。")
+        layout.addWidget(header)
+
+        toolbar = _panel(margins=(12, 10, 12, 10))
         row = QHBoxLayout()
+        row.setContentsMargins(12, 8, 12, 8)
         self.records_date = QDateEdit()
         self.records_date.setCalendarPopup(True)
         self.records_date.setDate(QDate.currentDate())
@@ -379,6 +829,7 @@ class MainWindow(QMainWindow):
         self.view_record_button = QPushButton("查看详情")
         self.edit_event_button = QPushButton("编辑合并事件")
         self.delete_record_button = QPushButton("删除选中")
+        self.delete_record_button.setObjectName("dangerButton")
         self.export_json_button = QPushButton("导出 JSON")
         self.export_csv_button = QPushButton("导出 CSV")
         for widget in (
@@ -395,6 +846,7 @@ class MainWindow(QMainWindow):
         ):
             row.addWidget(widget)
         row.addStretch(1)
+        toolbar.setLayout(row)
 
         self.records_tabs = QTabWidget()
         self.events_table = QTableWidget(0, 7)
@@ -404,20 +856,41 @@ class MainWindow(QMainWindow):
         for table in (self.events_table, self.raw_table):
             table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
             table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-            table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+            table.horizontalHeader().setStretchLastSection(False)
             table.verticalHeader().setVisible(False)
             table.setAlternatingRowColors(True)
+            table.setShowGrid(False)
+            table.setWordWrap(False)
+            table.setSortingEnabled(True)
+            table.setMinimumHeight(300)
+        self._configure_records_columns()
         self.records_tabs.addTab(self.events_table, "合并事件")
         self.records_tabs.addTab(self.raw_table, "原始识别")
 
         self.record_detail = QPlainTextEdit()
         self.record_detail.setReadOnly(True)
-        self.record_detail.setMaximumHeight(190)
+        self.record_detail.setMaximumHeight(170)
         self.record_detail.setPlaceholderText("选中一条记录后可查看完整 JSON。")
 
-        layout.addLayout(row)
-        layout.addWidget(self.records_tabs, 1)
-        layout.addWidget(self.record_detail)
+        tables_panel = _panel()
+        tables_layout = QVBoxLayout(tables_panel)
+        tables_layout.setContentsMargins(18, 14, 18, 14)
+        tables_title = QLabel("记录列表")
+        tables_title.setObjectName("sectionTitle")
+        tables_layout.addWidget(tables_title)
+        tables_layout.addWidget(self.records_tabs, 1)
+
+        detail_panel = _panel()
+        detail_layout = QVBoxLayout(detail_panel)
+        detail_layout.setContentsMargins(18, 14, 18, 14)
+        detail_title = QLabel("记录详情")
+        detail_title.setObjectName("sectionTitle")
+        detail_layout.addWidget(detail_title)
+        detail_layout.addWidget(self.record_detail)
+
+        layout.addWidget(toolbar)
+        layout.addWidget(tables_panel, 1)
+        layout.addWidget(detail_panel)
 
         self.refresh_records_button.clicked.connect(self.refresh_records)
         self.view_record_button.clicked.connect(self.show_selected_record_detail)
@@ -434,7 +907,15 @@ class MainWindow(QMainWindow):
     def _build_logs_tab(self) -> None:
         self.logs_tab = QWidget()
         layout = QVBoxLayout(self.logs_tab)
+        layout.setContentsMargins(18, 16, 18, 18)
+        layout.setSpacing(14)
+
+        header, _subtitle = _page_title("日志", "按日期查看原始识别记录和合并事件的文本摘要。")
+        layout.addWidget(header)
+
+        toolbar = _panel(margins=(12, 10, 12, 10))
         row = QHBoxLayout()
+        row.setContentsMargins(12, 8, 12, 8)
         self.log_date = QDateEdit()
         self.log_date.setCalendarPopup(True)
         self.log_date.setDate(QDate.currentDate())
@@ -443,10 +924,21 @@ class MainWindow(QMainWindow):
         row.addWidget(self.log_date)
         row.addWidget(self.refresh_logs_button)
         row.addStretch(1)
+        toolbar.setLayout(row)
+
         self.logs_text = QPlainTextEdit()
         self.logs_text.setReadOnly(True)
-        layout.addLayout(row)
-        layout.addWidget(self.logs_text, 1)
+
+        log_panel = _panel()
+        log_layout = QVBoxLayout(log_panel)
+        log_layout.setContentsMargins(18, 14, 18, 14)
+        log_title = QLabel("日志内容")
+        log_title.setObjectName("sectionTitle")
+        log_layout.addWidget(log_title)
+        log_layout.addWidget(self.logs_text, 1)
+
+        layout.addWidget(toolbar)
+        layout.addWidget(log_panel, 1)
         self.refresh_logs_button.clicked.connect(self.refresh_logs)
         self.log_date.dateChanged.connect(self.refresh_logs)
         self.tabs.addTab(self.logs_tab, "日志")
@@ -454,7 +946,20 @@ class MainWindow(QMainWindow):
     def _build_settings_tab(self) -> None:
         self.settings_tab = QWidget()
         layout = QVBoxLayout(self.settings_tab)
+        layout.setContentsMargins(18, 16, 18, 18)
+        layout.setSpacing(14)
+
+        header, _subtitle = _page_title("配置", "管理 API 配置档案、记录间隔、数据目录和隐私相关开关。")
+        layout.addWidget(header)
+
+        settings_panel = _panel()
+        settings_layout = QVBoxLayout(settings_panel)
+        settings_layout.setContentsMargins(18, 14, 18, 14)
+        settings_title = QLabel("运行设置")
+        settings_title.setObjectName("sectionTitle")
         form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        form.setFormAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
 
         self.active_profile_label = QLabel("未应用保存的配置")
         self.active_profile_label.setWordWrap(True)
@@ -484,22 +989,41 @@ class MainWindow(QMainWindow):
         form.addRow("", self.sensitive_filter_checkbox)
         form.addRow("", self.autostart_checkbox)
 
+        settings_layout.addWidget(settings_title)
+        settings_layout.addLayout(form)
+
         self.add_profile_button = QPushButton("添加 API 配置")
+        self.add_profile_button.setObjectName("primaryButton")
         self.profile_list_layout = QVBoxLayout()
         self.profile_list_layout.setSpacing(8)
         self.save_settings_button = QPushButton("保存设置")
+        self.save_settings_button.setObjectName("primaryButton")
         self.config_hint = QLabel(f"配置文件：{self.settings.env_path}")
         self.config_hint.setWordWrap(True)
+        self.config_hint.setObjectName("muted")
         self.data_hint = QLabel(f"数据目录：{self.settings.data_dir}")
         self.data_hint.setWordWrap(True)
+        self.data_hint.setObjectName("muted")
 
-        layout.addLayout(form)
-        layout.addWidget(QLabel("已保存 API 配置"))
-        layout.addLayout(self.profile_list_layout)
-        layout.addWidget(self.add_profile_button)
-        layout.addWidget(self.save_settings_button)
-        layout.addWidget(self.config_hint)
-        layout.addWidget(self.data_hint)
+        profiles_panel = _panel()
+        profiles_layout = QVBoxLayout(profiles_panel)
+        profiles_layout.setContentsMargins(18, 14, 18, 14)
+        profiles_title = QLabel("已保存 API 配置")
+        profiles_title.setObjectName("sectionTitle")
+        profiles_layout.addWidget(profiles_title)
+        profiles_layout.addLayout(self.profile_list_layout)
+        profiles_layout.addWidget(self.add_profile_button)
+
+        footer_panel = _panel()
+        footer_layout = QVBoxLayout(footer_panel)
+        footer_layout.setContentsMargins(18, 14, 18, 14)
+        footer_layout.addWidget(self.save_settings_button)
+        footer_layout.addWidget(self.config_hint)
+        footer_layout.addWidget(self.data_hint)
+
+        layout.addWidget(settings_panel)
+        layout.addWidget(profiles_panel, 1)
+        layout.addWidget(footer_panel)
         layout.addStretch(1)
 
         self.browse_data_dir_button.clicked.connect(self.browse_data_dir)
@@ -553,8 +1077,17 @@ class MainWindow(QMainWindow):
     def refresh_dashboard_summary(self) -> None:
         date_text = QDate.currentDate().toString("yyyy-MM-dd")
         duration_text, share_text = today_summary(self.settings.data_dir, date_text)
+        _total_minutes, totals, event_count = _summary_for_date(self.settings.data_dir, date_text)
         self.today_duration_label.setText(f"今日已记录时长：{duration_text}")
         self.today_share_label.setText(f"今日主要分类占比：{share_text}")
+        self.duration_value.setText(duration_text)
+        top_text = "暂无记录"
+        if totals:
+            top_name, top_minutes = totals.most_common(1)[0]
+            top_text = f"{top_name} · {format_minutes(top_minutes)}"
+        self.main_category_value.setText(top_text)
+        self.dashboard_bars.set_totals(totals)
+        self.last_seen_value.setText(f"{event_count} 条事件")
 
     def refresh_all_data_views(self) -> None:
         self.refresh_dashboard_summary()
@@ -594,9 +1127,9 @@ class MainWindow(QMainWindow):
         combo.blockSignals(False)
 
     def _build_profile_row(self, profile: ApiProfile) -> QWidget:
-        row = QWidget()
+        row = _panel(margins=(10, 8, 10, 8))
         layout = QHBoxLayout(row)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(10, 8, 10, 8)
 
         name_label = QLabel(profile.name)
         name_label.setMinimumWidth(180)
@@ -618,6 +1151,7 @@ class MainWindow(QMainWindow):
         edit_button = QPushButton("修改")
         edit_button.clicked.connect(lambda _checked=False, item=profile: self.edit_profile(item))
         delete_button = QPushButton("删除")
+        delete_button.setObjectName("dangerButton")
         delete_button.clicked.connect(lambda _checked=False, item=profile: self.delete_profile(item))
 
         layout.addWidget(name_label)
@@ -755,8 +1289,22 @@ class MainWindow(QMainWindow):
 
         date_text = self.statistics_date.date().toString("yyyy-MM-dd")
         period = self.statistics_period.currentText()
-        report = render_report_text(self.settings.data_dir, _date.fromisoformat(date_text), period)
+        anchor = _date.fromisoformat(date_text)
+        report = render_report_text(self.settings.data_dir, anchor, period)
         self.statistics_text.setPlainText(report)
+        events = _period_events(self.settings.data_dir, anchor, period)
+        totals = _category_totals(events)
+        total_minutes = sum(totals.values())
+        self.stat_total_value.setText(format_minutes(total_minutes))
+        if totals and total_minutes:
+            top_name, top_minutes = totals.most_common(1)[0]
+            self.stat_top_value.setText(f"{top_name} · {top_minutes * 100 / total_minutes:.1f}%")
+        else:
+            self.stat_top_value.setText("暂无记录")
+        unknown_minutes = totals.get("未知", 0)
+        unknown_pct = unknown_minutes * 100 / total_minutes if total_minutes else 0.0
+        self.stat_unknown_value.setText(f"{unknown_pct:.1f}%")
+        self.statistics_bars.set_totals(totals)
 
     @Slot()
     def refresh_records(self) -> None:
@@ -775,7 +1323,22 @@ class MainWindow(QMainWindow):
             item.setData(Qt.ItemDataRole.UserRole, payload)
         table.setItem(row, column, item)
 
+    def _configure_records_columns(self) -> None:
+        event_widths = [80, 80, 210, 360, 90, 90, 70]
+        raw_widths = [170, 210, 330, 120, 170, 90, 70]
+        for table, widths, stretch_column in (
+            (self.events_table, event_widths, 3),
+            (self.raw_table, raw_widths, 2),
+        ):
+            header = table.horizontalHeader()
+            for index, width in enumerate(widths):
+                header.setSectionResizeMode(index, QHeaderView.ResizeMode.Interactive)
+                table.setColumnWidth(index, width)
+            header.setSectionResizeMode(stretch_column, QHeaderView.ResizeMode.Stretch)
+
     def _populate_events_table(self, events: list[dict[str, Any]]) -> None:
+        self.events_table.setSortingEnabled(False)
+        self.events_table.clearContents()
         self.events_table.setRowCount(len(events))
         for row, event in enumerate(events):
             minutes = int(event.get("duration_minutes", 0) or 0)
@@ -786,8 +1349,12 @@ class MainWindow(QMainWindow):
             self._set_item(self.events_table, row, 4, format_minutes(minutes))
             self._set_item(self.events_table, row, 5, str(event.get("confidence", 0)))
             self._set_item(self.events_table, row, 6, "是" if event.get("privacy_risk") else "否")
+        self._configure_records_columns()
+        self.events_table.setSortingEnabled(True)
 
     def _populate_raw_table(self, records: list[dict[str, Any]]) -> None:
+        self.raw_table.setSortingEnabled(False)
+        self.raw_table.clearContents()
         self.raw_table.setRowCount(len(records))
         for row, record in enumerate(records):
             self._set_item(self.raw_table, row, 0, str(record.get("timestamp", "未知时间")), record)
@@ -797,6 +1364,8 @@ class MainWindow(QMainWindow):
             self._set_item(self.raw_table, row, 4, str(record.get("window_title", "未知")))
             self._set_item(self.raw_table, row, 5, str(record.get("confidence", 0)))
             self._set_item(self.raw_table, row, 6, "是" if record.get("privacy_risk") else "否")
+        self._configure_records_columns()
+        self.raw_table.setSortingEnabled(True)
 
     def _selected_payload(self) -> tuple[str, int, dict[str, Any]] | None:
         table = self.events_table if self.records_tabs.currentWidget() is self.events_table else self.raw_table
@@ -898,6 +1467,17 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def set_status(self, status: str) -> None:
         self.status_label.setText(f"状态：{status}")
+        self.status_value.setText(status)
+        if status == "运行中":
+            self.status_label.setStyleSheet(
+                "background: #ecfdf3; color: #027a48; border: 1px solid #abefc6; "
+                "border-radius: 8px; padding: 6px 10px; font-weight: 600;"
+            )
+        else:
+            self.status_label.setStyleSheet(
+                "background: #eef4ff; color: #1457d9; border: 1px solid #c7d7fe; "
+                "border-radius: 8px; padding: 6px 10px; font-weight: 600;"
+            )
         self.statusBar().showMessage(status)
 
     @Slot(str)
@@ -911,6 +1491,7 @@ class MainWindow(QMainWindow):
         event = result.get("event", "未知活动")
         timestamp = result.get("timestamp", "未知")
         self.last_time_label.setText(f"最近识别：{timestamp}")
+        self.last_seen_value.setText(str(timestamp).replace("T", " ")[:16])
         self.current_label.setText(f"当前活动：{category} —— {event}")
         self.result_text.setPlainText(json.dumps(result, ensure_ascii=False, indent=2))
         self.statusBar().showMessage("识别完成")
