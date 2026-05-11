@@ -1,134 +1,45 @@
 # ScreenActivityRecorder v0.1.0
 
-ScreenActivityRecorder is a local Windows desktop app that periodically analyzes your screen and builds an objective activity timeline. It helps users review what they spent time on by category, timeline, and statistics.
+这是 ScreenActivityRecorder 的首个 Windows 桌面版本。
 
-This project is useful for personal time review, lightweight work logs, learning logs, and activity statistics. It is not an anti-procrastination tool: it does not judge, warn, block apps, or interfere with user behavior.
+ScreenActivityRecorder 是一个本地屏幕活动记录工具。它会定时识别屏幕内容，生成结构化记录，并把连续相似活动合并成时间线，帮助用户回顾当天活动、查看分类占比和管理历史记录。
 
-## What It Does
+它不是反拖延工具，不会提醒、批评、阻止或干预用户操作，只做客观记录和统计。
 
-ScreenActivityRecorder works by:
+## 下载和运行
 
-1. Taking screenshots at a configured interval.
-2. Sending temporary image data to a GPT-compatible vision model.
-3. Converting the model response into structured local records.
-4. Merging continuous similar activities into timeline blocks.
-5. Showing timelines, statistics, and records in a desktop GUI.
+1. 下载 `ScreenActivityRecorder-v0.1.0-windows.zip`。
+2. 解压整个压缩包。
+3. 双击 `ScreenActivityAgent.exe`。
+4. 首次启动后，在“配置”页面添加 API 配置。
 
-Example output:
+不要只移动单独的 `.exe` 文件。请保留解压后的完整目录，包括 `_internal` 文件夹。
 
-```text
-2026-05-11 09:12-09:47 - Study / Programming - Watched a Python tutorial and practiced code
-2026-05-11 13:41-14:35 - Games / Wuthering Waves - Played Wuthering Waves
-```
+## 首次配置
 
-## Download And Run
+在“配置”页面添加：
 
-For normal Windows users:
+- `OPENAI_API_KEY`：你的 GPT 兼容 API Key。
+- `API Base URL`：API 地址，默认目标是 `https://apiport.cc.cd/v1`。
+- `Model`：服务商支持的视觉模型名称。
 
-1. Open the GitHub Releases page.
-2. Download `ScreenActivityRecorder-v0.1.0-windows.zip`.
-3. Extract the entire zip file.
-4. Double-click `ScreenActivityAgent.exe`.
-5. On first launch, open Settings and add an API profile.
+保存配置后点击“应用”，再回到首页点击“开始记录”或“手动识别一次”。
 
-Keep the whole extracted folder together. Do not move only the `.exe`, because the app also needs the `_internal` runtime directory.
+## 主要功能
 
-## First-Time Setup
+- 开始、暂停、手动识别一次。
+- 保存和切换多套 API 配置。
+- API Key 掩码显示，并支持复制完整 Key。
+- 首页展示今日记录时长和分类占比。
+- 独立时间线页面。
+- 日、周、月、近 7 天、近 30 天统计。
+- 记录管理：筛选、详情、编辑、删除、导出 JSON/CSV。
+- 隐私保护和敏感内容过滤。
+- 可选保存原始截图。
+- 可选 Windows 开机自启。
 
-In the app's Settings page, add an API profile:
+## 本地数据
 
-- `OPENAI_API_KEY`: your GPT-compatible API key.
-- `API Base URL`: the API endpoint. The default project target is `https://apiport.cc.cd/v1`.
-- `Model`: a vision-capable model name supported by your provider.
+发布包不包含开发数据、`.env`、`api_profiles.json` 或 `data/`。
 
-After saving a profile, click `Apply`, then return to the dashboard and click `Start Recording` or `Manual Recognize Once`.
-
-## Main Features
-
-- Start, pause, and manually run screen recognition.
-- Save multiple API profiles and switch between them.
-- Mask API keys in the UI and copy the full key when needed.
-- Dashboard with today's recorded duration and category share.
-- Daily timeline page.
-- Day, week, month, last 7 days, and last 30 days statistics.
-- Record management with filters, details, editing, deletion, and JSON/CSV export.
-- Privacy protection and sensitive content filtering.
-- Optional raw screenshot saving.
-- Optional Windows startup launch.
-
-## Local Data And Privacy
-
-Runtime records are stored locally after users run the app. By default, data is saved in:
-
-```text
-data/
-  raw/
-    YYYY-MM-DD.jsonl
-  events/
-    YYYY-MM-DD.json
-```
-
-The repository and release package do not include development data, `.env`, `api_profiles.json`, or `data/`.
-
-ScreenActivityRecorder asks the model to summarize activities without saving sensitive text. The code also applies privacy-oriented normalization before records are written.
-
-The app should not record raw passwords, verification codes, API keys, tokens, cookies, private chat transcripts, bank card numbers, ID numbers, home addresses, or medical private details. When sensitive content is detected, records should keep only a general description.
-
-## Build From Source
-
-Install [uv](https://docs.astral.sh/uv/) first, then run:
-
-```powershell
-uv sync
-uv run screen-agent-gui
-```
-
-Useful commands:
-
-```powershell
-uv run screen-agent-once
-uv run screen-agent-diagnose
-uv run screen-agent-report 2026-05-11 --period day
-uv run screen-agent-report 2026-05-11 --period week
-uv run screen-agent-report 2026-05-11 --period month
-uv run screen-agent-report 2026-05-11 --period last7
-uv run screen-agent-report 2026-05-11 --period last30
-```
-
-## Build Windows EXE
-
-From the repository root:
-
-```powershell
-.\build_exe.ps1
-```
-
-The build output is:
-
-```text
-dist/ScreenActivityAgent/ScreenActivityAgent.exe
-```
-
-To distribute it, zip the whole `dist/ScreenActivityAgent/` folder, not just the exe.
-
-## Configuration Variables
-
-The GUI is the recommended way to configure the app. Advanced users can also use environment variables or a local `.env` file:
-
-```text
-OPENAI_API_KEY
-SCREEN_AGENT_BASE_URL
-SCREEN_AGENT_MODEL
-SCREEN_AGENT_INTERVAL_SECONDS
-SCREEN_AGENT_DATA_DIR
-SCREEN_AGENT_SAVE_RAW_SCREENSHOT
-SCREEN_AGENT_PRIVACY_PROTECTION
-SCREEN_AGENT_SENSITIVE_CONTENT_FILTER
-SCREEN_AGENT_AUTOSTART
-```
-
-Legacy-compatible names `OPENAI_BASE_URL` and `MODEL_ID` are also supported.
-
-## Project Status
-
-This is an early Windows desktop version. Current storage uses local JSON/JSONL files. Future versions may add a stronger background service model, tray mode, database storage, richer charts, and improved installers.
+运行后，用户自己的配置和记录会保存在本地。
