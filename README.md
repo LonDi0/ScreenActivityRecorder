@@ -137,15 +137,3 @@ SCREEN_AGENT_AUTOSTART
 ## 项目状态
 
 当前是早期 Windows 桌面版本，数据存储使用本地 JSON/JSONL。后续可以继续完善托盘后台运行、数据库存储、更丰富的图表、安装包和自动更新。
-
-## 项目声明 Project Statement
-
-本项目的作者及单位：
-
-The author and affiliation of this project:
-
-```text
-项目名称（Project Name）：ScreenActivityRecorder
-作者（Author）：杜宇龙
-作者单位（Affiliation）：暨南大学网络空间安全学院（College of Cyber Security, Jinan University）
-```
