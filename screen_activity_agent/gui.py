@@ -58,7 +58,6 @@ from screen_activity_agent.logs import (
     filter_items_by_category,
     format_day_log,
     format_minutes,
-    format_timeline,
     load_events,
     load_raw_records,
     save_events,
@@ -723,10 +722,17 @@ class MainWindow(QMainWindow):
         row.addStretch(1)
         toolbar.setLayout(row)
 
-        self.timeline_text = QPlainTextEdit()
-        self.timeline_text.setReadOnly(True)
-        self.timeline_text.setPlaceholderText("这里展示所选日期的完整时间线。")
-        self.timeline_text.setMinimumHeight(460)
+        self.timeline_table = QTableWidget(0, 5)
+        self.timeline_table.setHorizontalHeaderLabels(["开始", "结束", "分类", "事件", "时长"])
+        self.timeline_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.timeline_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.timeline_table.horizontalHeader().setStretchLastSection(False)
+        self.timeline_table.verticalHeader().setVisible(False)
+        self.timeline_table.setAlternatingRowColors(True)
+        self.timeline_table.setShowGrid(False)
+        self.timeline_table.setWordWrap(False)
+        self.timeline_table.setSortingEnabled(True)
+        self.timeline_table.setMinimumHeight(460)
 
         content_panel = _panel()
         content_layout = QVBoxLayout(content_panel)
@@ -734,7 +740,7 @@ class MainWindow(QMainWindow):
         content_title = QLabel("完整时间线")
         content_title.setObjectName("sectionTitle")
         content_layout.addWidget(content_title)
-        content_layout.addWidget(self.timeline_text, 1)
+        content_layout.addWidget(self.timeline_table, 1)
 
         layout.addWidget(toolbar)
         layout.addWidget(content_panel, 1)
@@ -1096,6 +1102,18 @@ class MainWindow(QMainWindow):
         self.refresh_records()
         self.refresh_logs()
 
+    def refresh_visible_data_views(self) -> None:
+        self.refresh_dashboard_summary()
+        current = self.tabs.currentWidget()
+        if current is self.timeline_tab:
+            self.refresh_timeline()
+        elif current is self.statistics_tab:
+            self.refresh_statistics()
+        elif current is self.records_tab:
+            self.refresh_records()
+        elif current is self.logs_tab:
+            self.refresh_logs()
+
     def reload_profiles(self) -> None:
         self.profiles, self.active_profile = load_api_profiles(self.settings.env_path)
         self._refresh_active_profile_label()
@@ -1281,7 +1299,8 @@ class MainWindow(QMainWindow):
         date_text = self.timeline_date.date().toString("yyyy-MM-dd")
         category = self.timeline_category.currentText()
         self._refresh_category_filter(self.timeline_category, date_text)
-        self.timeline_text.setPlainText(format_timeline(self.settings.data_dir, date_text, category))
+        events = filter_items_by_category(load_events(self.settings.data_dir, date_text), category)
+        self._populate_timeline_table(events)
 
     @Slot()
     def refresh_statistics(self) -> None:
@@ -1335,6 +1354,30 @@ class MainWindow(QMainWindow):
                 header.setSectionResizeMode(index, QHeaderView.ResizeMode.Interactive)
                 table.setColumnWidth(index, width)
             header.setSectionResizeMode(stretch_column, QHeaderView.ResizeMode.Stretch)
+
+    def _configure_timeline_columns(self) -> None:
+        widths = [90, 90, 240, 520, 100]
+        header = self.timeline_table.horizontalHeader()
+        for index, width in enumerate(widths):
+            header.setSectionResizeMode(index, QHeaderView.ResizeMode.Interactive)
+            self.timeline_table.setColumnWidth(index, width)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+
+    def _populate_timeline_table(self, events: list[dict[str, Any]]) -> None:
+        self.timeline_table.setSortingEnabled(False)
+        self.timeline_table.clearContents()
+        self.timeline_table.setRowCount(len(events))
+        for row, event in enumerate(events):
+            minutes = int(event.get("duration_minutes", 0) or 0)
+            self._set_item(self.timeline_table, row, 0, str(event.get("start", "--:--")), event)
+            self._set_item(self.timeline_table, row, 1, str(event.get("end", "--:--")))
+            self._set_item(self.timeline_table, row, 2, category_label(event.get("category")))
+            self._set_item(self.timeline_table, row, 3, str(event.get("event", "未知活动")))
+            self._set_item(self.timeline_table, row, 4, format_minutes(minutes))
+        self._configure_timeline_columns()
+        self.timeline_table.setSortingEnabled(True)
+        if events:
+            self.timeline_table.scrollToBottom()
 
     def _populate_events_table(self, events: list[dict[str, Any]]) -> None:
         self.events_table.setSortingEnabled(False)
@@ -1495,7 +1538,7 @@ class MainWindow(QMainWindow):
         self.current_label.setText(f"当前活动：{category} —— {event}")
         self.result_text.setPlainText(json.dumps(result, ensure_ascii=False, indent=2))
         self.statusBar().showMessage("识别完成")
-        self.refresh_all_data_views()
+        self.refresh_visible_data_views()
 
     def closeEvent(self, event) -> None:  # noqa: N802
         if self.worker:
