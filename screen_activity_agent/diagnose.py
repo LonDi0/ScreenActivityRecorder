@@ -72,7 +72,12 @@ def main() -> int:
         _print_result("api key", False, "OPENAI_API_KEY is missing")
         return 1
 
-    client = OpenAI(api_key=settings.api_key, base_url=settings.base_url)
+    client = OpenAI(
+        api_key=settings.api_key,
+        base_url=settings.base_url,
+        timeout=settings.api_timeout_seconds,
+        max_retries=0,
+    )
     failed = False
 
     try:

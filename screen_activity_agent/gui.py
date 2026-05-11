@@ -521,12 +521,16 @@ class AgentWorker(QObject):
     result_ready = Signal(dict)
     error_ready = Signal(str)
     status_ready = Signal(str)
+    busy_ready = Signal(bool)
 
     def __init__(self, settings: Settings) -> None:
         super().__init__()
         self.settings = settings
         self.agent = ScreenActivityAgent(settings)
         self.timer: QTimer | None = None
+        self.is_running = False
+        self.is_busy = False
+        self.stop_after_current = False
 
     @Slot()
     def start(self) -> None:
@@ -538,20 +542,27 @@ class AgentWorker(QObject):
             self.timer = QTimer(self)
             self.timer.setInterval(self.settings.interval_seconds * 1000)
             self.timer.timeout.connect(self.analyze_once)
+        self.is_running = True
+        self.stop_after_current = False
         self.status_ready.emit("运行中")
         self.analyze_once()
-        self.timer.start()
+        if self.is_running:
+            self.timer.start()
 
     @Slot()
     def pause(self) -> None:
         if self.timer:
             self.timer.stop()
+        self.is_running = False
+        self.stop_after_current = False
         self.status_ready.emit("已暂停")
 
     @Slot()
     def stop(self) -> None:
         if self.timer:
             self.timer.stop()
+        self.is_running = False
+        self.stop_after_current = True
         self.status_ready.emit("已暂停")
 
     @Slot()
@@ -559,12 +570,22 @@ class AgentWorker(QObject):
         if not self.settings.is_complete:
             self.error_ready.emit("API Key、URL 或模型未配置完整，无法识别。")
             return
+        if self.is_busy:
+            return
+        self.is_busy = True
+        self.busy_ready.emit(True)
         try:
             record: ActivityRecord = self.agent.analyze_once()
         except Exception as exc:
             self.error_ready.emit(str(exc))
+            self.is_busy = False
+            self.busy_ready.emit(False)
             return
+        self.is_busy = False
+        self.busy_ready.emit(False)
         self.result_ready.emit(record.to_dict())
+        if self.stop_after_current and self.timer:
+            self.timer.stop()
 
 
 class MainWindow(QMainWindow):
@@ -577,6 +598,7 @@ class MainWindow(QMainWindow):
         self.settings = settings
         self.thread: QThread | None = None
         self.worker: AgentWorker | None = None
+        self.worker_busy = False
         self.profiles: list[ApiProfile] = []
         self.active_profile: str | None = None
 
@@ -692,7 +714,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(result_panel, 1)
 
         self.start_button.clicked.connect(self._start_clicked)
-        self.pause_button.clicked.connect(self.pause_requested.emit)
+        self.pause_button.clicked.connect(self._pause_clicked)
         self.once_button.clicked.connect(self._once_clicked)
         self.tabs.addTab(self.dashboard_tab, "首页")
 
@@ -1047,6 +1069,7 @@ class MainWindow(QMainWindow):
         self.worker.result_ready.connect(self.show_result)
         self.worker.error_ready.connect(self.show_error)
         self.worker.status_ready.connect(self.set_status)
+        self.worker.busy_ready.connect(self.set_worker_busy)
         self.thread.finished.connect(self.worker.deleteLater)
         self.thread.start()
 
@@ -1067,11 +1090,28 @@ class MainWindow(QMainWindow):
 
     def _start_clicked(self) -> None:
         if self._require_complete_config():
+            self.set_worker_busy(True)
             self.start_requested.emit()
+
+    def _pause_clicked(self) -> None:
+        self.pause_requested.emit()
+        if self.worker_busy:
+            self.statusBar().showMessage("正在等待当前 API 请求结束后暂停。")
+        else:
+            self.statusBar().showMessage("已请求暂停。")
 
     def _once_clicked(self) -> None:
         if self._require_complete_config():
+            self.set_worker_busy(True)
             self.once_requested.emit()
+
+    @Slot(bool)
+    def set_worker_busy(self, busy: bool) -> None:
+        self.worker_busy = busy
+        self.start_button.setEnabled(not busy)
+        self.once_button.setEnabled(not busy)
+        if busy:
+            self.statusBar().showMessage("正在调用 API 识别屏幕...")
 
     def refresh_config_labels(self) -> None:
         self.key_label.setText(f"OPENAI_API_KEY：{'已配置' if self.settings.has_api_key else '未配置'}")
@@ -1196,28 +1236,38 @@ class MainWindow(QMainWindow):
             return
         updated = dialog.profile()
         was_active = profile.name == self.active_profile
+        if was_active and self.worker_busy:
+            QMessageBox.warning(
+                self,
+                "正在识别",
+                "当前 API 请求尚未结束，暂时不能修改正在使用的配置。请等待本次识别超时或返回错误后再修改。",
+            )
+            return
         upsert_api_profile(self.settings.env_path, updated, make_active=was_active)
         if was_active:
-            self._apply_values(
+            applied = self._apply_values(
                 api_key=updated.api_key,
                 base_url=updated.base_url,
                 model=updated.model,
                 interval_seconds=self.interval_input.value(),
                 active_profile=updated.name,
             )
+            if not applied:
+                return
         else:
             self.reload_profiles()
         self.statusBar().showMessage(f"API 配置已修改：{updated.name}")
 
     def apply_profile(self, profile: ApiProfile) -> None:
-        self._apply_values(
+        applied = self._apply_values(
             api_key=profile.api_key,
             base_url=profile.base_url,
             model=profile.model,
             interval_seconds=self.interval_input.value(),
             active_profile=profile.name,
         )
-        QMessageBox.information(self, "配置已应用", f"已切换到 API 配置：{profile.name}")
+        if applied:
+            QMessageBox.information(self, "配置已应用", f"已切换到 API 配置：{profile.name}")
 
     def delete_profile(self, profile: ApiProfile) -> None:
         reply = QMessageBox.question(self, "删除配置", f"确定删除 API 配置“{profile.name}”？")
@@ -1241,14 +1291,15 @@ class MainWindow(QMainWindow):
         if not api_key or not base_url or not model:
             QMessageBox.warning(self, "配置不完整", "请先添加并应用一个完整的 API 配置。")
             return
-        self._apply_values(
+        applied = self._apply_values(
             api_key=api_key,
             base_url=base_url,
             model=model,
             interval_seconds=self.interval_input.value(),
             active_profile=self.active_profile,
         )
-        QMessageBox.information(self, "设置已保存", "设置已保存，新的记录任务会使用最新配置。")
+        if applied:
+            QMessageBox.information(self, "设置已保存", "设置已保存，新的记录任务会使用最新配置。")
 
     def _apply_values(
         self,
@@ -1258,7 +1309,14 @@ class MainWindow(QMainWindow):
         model: str,
         interval_seconds: int,
         active_profile: str | None,
-    ) -> None:
+    ) -> bool:
+        if self.worker_busy:
+            QMessageBox.warning(
+                self,
+                "正在识别",
+                "当前 API 请求尚未结束，暂时不能切换配置。请等待本次识别超时或返回错误后再切换。",
+            )
+            return False
         save_settings_to_env(
             env_path=self.settings.env_path,
             api_key=api_key,
@@ -1288,6 +1346,7 @@ class MainWindow(QMainWindow):
         self.refresh_all_data_views()
         self._restart_worker()
         self.statusBar().showMessage("设置已保存。")
+        return True
 
     @Slot()
     def refresh_logs(self) -> None:
@@ -1525,11 +1584,13 @@ class MainWindow(QMainWindow):
 
     @Slot(str)
     def show_error(self, message: str) -> None:
+        self.set_worker_busy(False)
         self.statusBar().showMessage(f"错误：{message}")
         self.result_text.setPlainText(f"识别失败：{message}")
 
     @Slot(dict)
     def show_result(self, result: dict) -> None:
+        self.set_worker_busy(False)
         category = category_label(result.get("category"))
         event = result.get("event", "未知活动")
         timestamp = result.get("timestamp", "未知")

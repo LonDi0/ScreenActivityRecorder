@@ -13,7 +13,12 @@ class VisionClient:
         if not settings.has_api_key:
             raise ValueError("OPENAI_API_KEY is not configured.")
         self.settings = settings
-        self.client = OpenAI(api_key=settings.api_key, base_url=settings.base_url)
+        self.client = OpenAI(
+            api_key=settings.api_key,
+            base_url=settings.base_url,
+            timeout=settings.api_timeout_seconds,
+            max_retries=0,
+        )
 
     def analyze(
         self,

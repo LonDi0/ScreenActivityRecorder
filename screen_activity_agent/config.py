@@ -20,6 +20,7 @@ DEFAULT_MERGE_GAP_SECONDS = 180
 DEFAULT_SCREENSHOT_MAX_WIDTH = 1280
 DEFAULT_IMAGE_FORMAT = "jpeg"
 DEFAULT_JPEG_QUALITY = 70
+DEFAULT_API_TIMEOUT_SECONDS = 20
 PROFILES_FILE = "api_profiles.json"
 AUTOSTART_REGISTRY_NAME = "ScreenActivityAgent"
 
@@ -35,6 +36,7 @@ class Settings:
     screenshot_all_screens: bool
     image_format: str
     jpeg_quality: int
+    api_timeout_seconds: int
     data_dir: Path
     save_raw_screenshot: bool
     privacy_protection_enabled: bool
@@ -200,6 +202,7 @@ def load_settings(project_root: Path | None = None) -> Settings:
         screenshot_all_screens=_bool_env("SCREEN_AGENT_ALL_SCREENS", False),
         image_format=image_format,
         jpeg_quality=min(max(_int_env("SCREEN_AGENT_JPEG_QUALITY", DEFAULT_JPEG_QUALITY), 1), 95),
+        api_timeout_seconds=_int_env("SCREEN_AGENT_API_TIMEOUT_SECONDS", DEFAULT_API_TIMEOUT_SECONDS),
         data_dir=data_dir,
         save_raw_screenshot=_bool_env("SCREEN_AGENT_SAVE_RAW_SCREENSHOT", False),
         privacy_protection_enabled=_bool_env("SCREEN_AGENT_PRIVACY_PROTECTION", True),
