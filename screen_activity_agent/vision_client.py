@@ -5,7 +5,7 @@ from openai import BadRequestError, OpenAI
 from screen_activity_agent.config import Settings
 from screen_activity_agent.jsonutil import parse_json_object
 from screen_activity_agent.models import ActivityRecord
-from screen_activity_agent.prompts import SYSTEM_PROMPT, build_user_prompt
+from screen_activity_agent.prompts import build_system_prompt, build_user_prompt
 
 
 class VisionClient:
@@ -23,7 +23,7 @@ class VisionClient:
         recent_records: list[dict],
     ) -> ActivityRecord:
         messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": build_system_prompt()},
                 {
                     "role": "user",
                     "content": [
@@ -45,4 +45,9 @@ class VisionClient:
             )
         content = response.choices[0].message.content or "{}"
         data = parse_json_object(content)
-        return ActivityRecord.from_model_json(data, timestamp)
+        return ActivityRecord.from_model_json(
+            data,
+            timestamp,
+            privacy_protection_enabled=self.settings.privacy_protection_enabled,
+            sensitive_content_filter_enabled=self.settings.sensitive_content_filter_enabled,
+        )

@@ -6,9 +6,12 @@ from pathlib import Path
 
 from screen_activity_agent.agent import ScreenActivityAgent
 from screen_activity_agent.config import load_settings
+from screen_activity_agent.reports import main as report_main
 
 
 def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] == "report":
+        return report_main(sys.argv[2:])
     settings = load_settings(Path.cwd())
     agent = ScreenActivityAgent(settings)
     try:

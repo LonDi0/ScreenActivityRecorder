@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from screen_activity_agent.classification import normalize_category
+from screen_activity_agent.privacy import sanitize_record_fields
+
 
 @dataclass(frozen=True)
 class ActivityRecord:
@@ -17,15 +20,17 @@ class ActivityRecord:
     privacy_risk: bool
 
     @classmethod
-    def from_model_json(cls, data: dict[str, Any], fallback_timestamp: str) -> "ActivityRecord":
-        category = data.get("category")
-        if not isinstance(category, list):
-            category = ["未知", "未知"]
-        category = [str(item).strip() for item in category if str(item).strip()]
-        if not category:
-            category = ["未知", "未知"]
-        if len(category) == 1:
-            category.append("未知")
+    def from_model_json(
+        cls,
+        data: dict[str, Any],
+        fallback_timestamp: str,
+        *,
+        privacy_protection_enabled: bool = True,
+        sensitive_content_filter_enabled: bool = True,
+    ) -> "ActivityRecord":
+        raw_category = data.get("category")
+        category = raw_category if isinstance(raw_category, list) else None
+        normalized = normalize_category(category)
 
         try:
             confidence = float(data.get("confidence", 0.0))
@@ -33,16 +38,39 @@ class ActivityRecord:
             confidence = 0.0
         confidence = min(max(confidence, 0.0), 1.0)
 
+        privacy_risk = bool(data.get("privacy_risk", False))
+        if privacy_protection_enabled or sensitive_content_filter_enabled:
+            sanitized = sanitize_record_fields(
+                app=data.get("app"),
+                window_title=data.get("window_title"),
+                screen_content=data.get("screen_content"),
+                event=data.get("event"),
+                category=normalized.to_list(),
+                privacy_risk=privacy_risk if sensitive_content_filter_enabled else False,
+            )
+            app = sanitized.app
+            window_title = sanitized.window_title
+            screen_content = sanitized.screen_content
+            event = sanitized.event
+            category_list = sanitized.category.to_list()
+            privacy_risk = sanitized.privacy_risk
+        else:
+            app = str(data.get("app") or "未知")
+            window_title = str(data.get("window_title") or "未知")
+            screen_content = str(data.get("screen_content") or "未知")
+            event = str(data.get("event") or "未知活动")
+            category_list = normalized.to_list()
+
         return cls(
             timestamp=str(data.get("timestamp") or fallback_timestamp),
-            app=str(data.get("app") or "未知"),
-            window_title=str(data.get("window_title") or "未知"),
-            screen_content=str(data.get("screen_content") or "未知"),
-            category=category[:3],
-            event=str(data.get("event") or "未知活动"),
+            app=app,
+            window_title=window_title,
+            screen_content=screen_content,
+            category=category_list,
+            event=event,
             is_continuation=bool(data.get("is_continuation", False)),
             confidence=confidence,
-            privacy_risk=bool(data.get("privacy_risk", False)),
+            privacy_risk=privacy_risk,
         )
 
     def to_dict(self) -> dict[str, Any]:

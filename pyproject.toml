@@ -21,6 +21,7 @@ dev = [
 screen-agent-gui = "screen_activity_agent.gui:main"
 screen-agent-once = "screen_activity_agent.cli:main"
 screen-agent-diagnose = "screen_activity_agent.diagnose:main"
+screen-agent-report = "screen_activity_agent.reports:main"
 
 [build-system]
 requires = ["hatchling"]

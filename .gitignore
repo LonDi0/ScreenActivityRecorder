@@ -5,6 +5,7 @@ __pycache__/
 data/
 .tmp-check/
 .tmp-config-check/
+.tmp-rebuild/
 build/
 dist/
 *.spec

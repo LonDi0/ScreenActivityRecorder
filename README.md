@@ -61,6 +61,18 @@ API 诊断：
 uv run screen-agent-diagnose
 ```
 
+报表查询：
+
+```powershell
+uv run screen-agent-report 2026-05-09 --period day
+uv run screen-agent-report 2026-05-09 --period week
+uv run screen-agent-report 2026-05-09 --period month
+uv run screen-agent-report 2026-05-09 --period last7
+uv run screen-agent-report 2026-05-09 --period last30
+```
+
+`last7` 和 `last30` 是按所选日期向前滚动统计，包含所选日期当天；它们不等价于自然周 `week` 或自然月 `month`。
+
 如果系统还没有安装 `uv`，可在 PowerShell 中安装后重新打开终端：
 
 ```powershell

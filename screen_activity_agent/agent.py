@@ -28,6 +28,15 @@ class ScreenActivityAgent:
             image_format=self.settings.image_format,
             jpeg_quality=self.settings.jpeg_quality,
         )
+        if self.settings.save_raw_screenshot:
+            screenshot_dir = self.settings.data_dir / "screenshots"
+            screenshot_dir.mkdir(parents=True, exist_ok=True)
+            safe_timestamp = timestamp.replace(":", "-")
+            header, encoded = image_data_url.split(",", 1)
+            suffix = ".jpg" if "image/jpeg" in header else ".png"
+            import base64
+
+            (screenshot_dir / f"{safe_timestamp}{suffix}").write_bytes(base64.b64decode(encoded))
         client = VisionClient(self.settings)
         record = client.analyze(
             image_data_url=image_data_url,

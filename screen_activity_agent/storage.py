@@ -68,6 +68,7 @@ class ActivityStorage:
 
     def _save_events(self, day: str, events: list[dict[str, Any]]) -> None:
         path = self._events_path(day)
+        path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", encoding="utf-8") as handle:
             json.dump(events, handle, ensure_ascii=False, indent=2)
 
@@ -77,11 +78,22 @@ class ActivityStorage:
         events = self._load_events(day)
         current_minute = minute_key(ts)
 
+        if events and self._is_within_merge_gap(events[-1], ts):
+            last = events[-1]
+            last["end"] = current_minute
+            last["duration_minutes"] = self._duration_minutes(last["date"], last["start"], last["end"])
+            last["_last_seen"] = record.timestamp
+
         if events and self._can_merge(events[-1], record, ts):
             last = events[-1]
             last["end"] = current_minute
-            last["event"] = record.event if len(record.event) > len(last.get("event", "")) else last.get("event", record.event)
-            last["category"] = record.category
+            if last.get("privacy_risk") or record.privacy_risk:
+                last["event"] = "用户正在查看包含敏感信息的页面"
+                last["category"] = ["隐私内容", "敏感页面"]
+                last["privacy_risk"] = True
+            else:
+                last["event"] = record.event if len(record.event) > len(last.get("event", "")) else last.get("event", record.event)
+                last["category"] = record.category
             last["confidence"] = round((float(last.get("confidence", 0.0)) + record.confidence) / 2, 3)
             last["duration_minutes"] = self._duration_minutes(last["date"], last["start"], last["end"])
             last["_last_seen"] = record.timestamp
@@ -93,8 +105,9 @@ class ActivityStorage:
                     "end": current_minute,
                     "category": record.category,
                     "event": record.event,
-                    "duration_minutes": 1,
+                    "duration_minutes": 0,
                     "confidence": record.confidence,
+                    "privacy_risk": record.privacy_risk,
                     "_last_seen": record.timestamp,
                 }
             )
@@ -118,9 +131,18 @@ class ActivityStorage:
 
         return current_ts - last_seen <= timedelta(seconds=self.merge_gap_seconds)
 
+    def _is_within_merge_gap(self, event: dict[str, Any], current_ts) -> bool:
+        last_seen_raw = event.get("_last_seen")
+        if last_seen_raw:
+            last_seen = parse_iso(str(last_seen_raw))
+        else:
+            last_seen = parse_iso(local_iso_for_date_minute(event["date"], event.get("end", "00:00")))
+
+        return current_ts - last_seen <= timedelta(seconds=self.merge_gap_seconds)
+
     @staticmethod
     def _duration_minutes(day: str, start: str, end: str) -> int:
         start_ts = parse_iso(local_iso_for_date_minute(day, start))
         end_ts = parse_iso(local_iso_for_date_minute(day, end))
         minutes = int((end_ts - start_ts).total_seconds() // 60)
-        return max(1, minutes)
+        return max(0, minutes)
