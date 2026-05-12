@@ -78,12 +78,6 @@ class ActivityStorage:
         events = self._load_events(day)
         current_minute = minute_key(ts)
 
-        if events and self._is_within_merge_gap(events[-1], ts):
-            last = events[-1]
-            last["end"] = current_minute
-            last["duration_minutes"] = self._duration_minutes(last["date"], last["start"], last["end"])
-            last["_last_seen"] = record.timestamp
-
         if events and self._can_merge(events[-1], record, ts):
             last = events[-1]
             last["end"] = current_minute
@@ -123,15 +117,6 @@ class ActivityStorage:
         if not _event_similar(str(event.get("event", "")), record.event):
             return False
 
-        last_seen_raw = event.get("_last_seen")
-        if last_seen_raw:
-            last_seen = parse_iso(str(last_seen_raw))
-        else:
-            last_seen = parse_iso(local_iso_for_date_minute(event["date"], event.get("end", "00:00")))
-
-        return current_ts - last_seen <= timedelta(seconds=self.merge_gap_seconds)
-
-    def _is_within_merge_gap(self, event: dict[str, Any], current_ts) -> bool:
         last_seen_raw = event.get("_last_seen")
         if last_seen_raw:
             last_seen = parse_iso(str(last_seen_raw))

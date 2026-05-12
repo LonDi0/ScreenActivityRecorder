@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from screen_activity_agent.classification import normalize_category
+from screen_activity_agent.classification import UNKNOWN_PRIMARY, normalize_category
 from screen_activity_agent.privacy import sanitize_record_fields
 
 
@@ -18,6 +18,21 @@ class ActivityRecord:
     is_continuation: bool
     confidence: float
     privacy_risk: bool
+
+    @classmethod
+    def failure_record(cls, *, timestamp: str, stage: str) -> "ActivityRecord":
+        failure_stage = stage.strip() or "API 访问失败"
+        return cls(
+            timestamp=timestamp,
+            app=UNKNOWN_PRIMARY,
+            window_title=UNKNOWN_PRIMARY,
+            screen_content=f"{failure_stage}，等待重试",
+            category=[UNKNOWN_PRIMARY, failure_stage],
+            event=failure_stage,
+            is_continuation=True,
+            confidence=0.0,
+            privacy_risk=False,
+        )
 
     @classmethod
     def from_model_json(

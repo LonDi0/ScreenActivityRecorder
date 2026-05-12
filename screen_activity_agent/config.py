@@ -13,7 +13,7 @@ if sys.platform == "win32":
     import winreg
 
 
-DEFAULT_BASE_URL = "https://apiport.cc.cd/v1"
+DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MODEL = "gpt-5.5"
 DEFAULT_INTERVAL_SECONDS = 60
 DEFAULT_MERGE_GAP_SECONDS = 180
@@ -106,6 +106,8 @@ def _bool_env(name: str, default: bool) -> bool:
 
 def _normalize_base_url(base_url: str) -> str:
     normalized = base_url.strip().rstrip("/")
+    if normalized == "https://api.openai.com":
+        return "https://api.openai.com/v1"
     if normalized == "https://apiport.cc.cd":
         return "https://apiport.cc.cd/v1"
     return normalized

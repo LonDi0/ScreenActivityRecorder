@@ -56,7 +56,7 @@ YYYY-MM-DD HH:mm-HH:mm —— 一级分类 / 二级分类 / 三级分类 —— 
 - 语言：Python
 - 环境管理：uv
 - AI 模型：GPT 兼容接口
-- API Base URL：`https://apiport.cc.cd`
+- API Base URL：`https://api.openai.com/v1`
 - API Key：开发阶段可直接从本地 .env读取，以后图形界面可以做一个设置页，输入一次 API Key，然后保存到本地安全存储 .env里
 - SDK：OpenAI Python SDK
 - 数据存储：第一版使用本地 JSON / JSONL，后续可升级为 SQLite
@@ -734,3 +734,25 @@ Agent 不应：
 - 简洁描述：说明这次变更对用户或系统行为造成了什么影响。
 
 禁止只改代码而不记录功能变化。
+
+## 排障记录维护要求
+
+项目必须维护 `TROUBLESHOOTING.md`，用于沉淀开发、打包、发布、网络、认证、Windows 环境、Codex 执行环境等问题的排查经验。
+
+当遇到以下情况之一，并且已经形成明确判断或解决办法时，必须在同一次变更中更新 `TROUBLESHOOTING.md`：
+
+- 发布、上传 Release、推送 GitHub、认证或网络访问失败。
+- Windows 本地环境、TLS、PowerShell、Python、uv、PyInstaller 或依赖路径导致的问题。
+- 打包产物、`.exe`、压缩包或用户下载包出现可复现问题。
+- Codex 工具、审批层、浏览器自动化或命令执行环境出现影响工作的异常。
+- 某个问题已经排除常见误判，后续维护者需要复用这个结论。
+
+排障记录应包含：
+
+- 日期。
+- 现象：用户看到的错误、失败命令或异常行为。
+- 判断：问题发生在哪一层，以及排除了哪些原因。
+- 验证：用于确认判断的命令、状态码或关键日志。
+- 处理：最终可行的解决步骤或替代路径。
+
+排障记录不得包含真实 API Key、GitHub Token、Cookie、验证码、密码或其他敏感信息。

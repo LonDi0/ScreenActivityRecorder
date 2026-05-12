@@ -20,7 +20,7 @@ ScreenActivityRecorder 是一个本地屏幕活动记录工具。它会定时识
 在“配置”页面添加：
 
 - `OPENAI_API_KEY`：你的 GPT 兼容 API Key。
-- `API Base URL`：API 地址，默认目标是 `https://apiport.cc.cd/v1`。
+- `API Base URL`：API 地址，默认目标是 `https://api.openai.com/v1`。
 - `Model`：服务商支持的视觉模型名称。
 
 保存配置后点击“应用”，再回到首页点击“开始记录”或“手动识别一次”。

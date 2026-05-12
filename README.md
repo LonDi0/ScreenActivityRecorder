@@ -58,7 +58,7 @@ ScreenActivityRecorder 可以帮助你回答这些问题：
 在“配置”页面添加 API 配置：
 
 - `OPENAI_API_KEY`：你的 GPT 兼容 API Key。
-- `API Base URL`：API 地址，项目默认目标是 `https://apiport.cc.cd/v1`。
+- `API Base URL`：API 地址，项目默认目标是 `https://api.openai.com/v1`。
 - `Model`：你的服务商支持的视觉模型名称。
 
 保存配置后点击“应用”，回到首页点击“开始记录”或“手动识别一次”。

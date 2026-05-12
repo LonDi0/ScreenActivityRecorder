@@ -6,6 +6,7 @@ data/
 .tmp-check/
 .tmp-config-check/
 .tmp-rebuild/
+.tmp-release*/
 build/
 dist/
 *.spec

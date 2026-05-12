@@ -416,18 +416,27 @@ def _category_color(name: str, fallback_index: int | None = None) -> QColor:
 
 
 class TimelineChartWidget(QWidget):
+    MIN_VISIBLE_MINUTES = 30
+    ZOOM_STEP = 0.82
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.events: list[dict[str, Any]] = []
+        self._view_start: int | None = None
+        self._view_end: int | None = None
         self.setMinimumHeight(150)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setFocusPolicy(Qt.FocusPolicy.WheelFocus)
+        self.setToolTip("时间跨度超过 30 分钟时，可在图表上滚动鼠标滚轮局部缩放；双击重置。")
 
     def set_events(self, events: list[dict[str, Any]]) -> None:
         self.events = list(events)
+        self._view_start = None
+        self._view_end = None
         self.update()
 
     def _segments(self) -> list[tuple[int, int, dict[str, Any]]]:
-        segments: list[tuple[int, int, dict[str, Any]]] = []
+        raw_segments: list[tuple[int, int, dict[str, Any]]] = []
         for event in self.events:
             start = _clock_minutes(event.get("start"))
             end = _clock_minutes(event.get("end"))
@@ -437,9 +446,116 @@ class TimelineChartWidget(QWidget):
                 duration = _event_minutes(event)
                 end = start + max(1, duration)
             end = min(24 * 60, max(start + 1, end))
-            segments.append((start, end, event))
-        segments.sort(key=lambda item: (item[0], item[1]))
+            raw_segments.append((start, end, event))
+        raw_segments.sort(key=lambda item: (item[0], item[1]))
+
+        segments: list[tuple[int, int, dict[str, Any]]] = []
+        for start, end, item in raw_segments:
+            primary = _category_primary(item.get("category"))
+            if segments:
+                last_start, last_end, last_item = segments[-1]
+                last_primary = _category_primary(last_item.get("category"))
+                if primary == last_primary and start <= last_end + 1:
+                    merged_item = dict(last_item)
+                    merged_end = max(last_end, end)
+                    merged_item["category"] = [primary]
+                    merged_item["duration_minutes"] = max(1, merged_end - last_start)
+                    segments[-1] = (last_start, merged_end, merged_item)
+                    continue
+            chart_item = dict(item)
+            chart_item["category"] = [primary]
+            chart_item["duration_minutes"] = max(1, end - start)
+            segments.append((start, end, chart_item))
         return segments
+
+    def _full_bounds(self, segments: list[tuple[int, int, dict[str, Any]]]) -> tuple[int, int]:
+        span_start = min(start for start, _end, _event in segments)
+        span_end = max(end for _start, end, _event in segments)
+        if span_end <= span_start:
+            span_end = span_start + 1
+        return span_start, span_end
+
+    def _view_bounds(self, segments: list[tuple[int, int, dict[str, Any]]]) -> tuple[int, int]:
+        full_start, full_end = self._full_bounds(segments)
+        full_span = full_end - full_start
+        if full_span <= self.MIN_VISIBLE_MINUTES:
+            self._view_start = None
+            self._view_end = None
+            return full_start, full_end
+
+        if self._view_start is None or self._view_end is None:
+            return full_start, full_end
+
+        view_start = int(self._view_start)
+        view_end = int(self._view_end)
+        view_span = max(self.MIN_VISIBLE_MINUTES, min(full_span, view_end - view_start))
+        view_start = max(full_start, min(view_start, full_end - view_span))
+        view_end = view_start + view_span
+        if view_end > full_end:
+            view_end = full_end
+            view_start = view_end - view_span
+        self._view_start = view_start
+        self._view_end = view_end
+        return view_start, view_end
+
+    def _axis_rect(self) -> QRectF:
+        left = 54
+        right = 28
+        top = 34
+        bar_h = 28
+        width = max(120, self.width() - left - right)
+        return QRectF(left, top, width, bar_h)
+
+    def _apply_zoom(self, delta_y: int, cursor_x: float) -> bool:
+        if delta_y == 0:
+            return False
+        segments = self._segments()
+        if not segments:
+            return False
+        full_start, full_end = self._full_bounds(segments)
+        full_span = full_end - full_start
+        if full_span <= self.MIN_VISIBLE_MINUTES:
+            self._view_start = None
+            self._view_end = None
+            return False
+
+        view_start, view_end = self._view_bounds(segments)
+        view_span = view_end - view_start
+        wheel_steps = delta_y / 120
+        target_span = int(round(view_span * (self.ZOOM_STEP**wheel_steps)))
+        target_span = max(self.MIN_VISIBLE_MINUTES, min(full_span, target_span))
+
+        axis = self._axis_rect()
+        ratio = (cursor_x - axis.left()) / axis.width()
+        ratio = max(0.0, min(1.0, ratio))
+        focus_minute = view_start + ratio * view_span
+        new_start = int(round(focus_minute - ratio * target_span))
+        new_start = max(full_start, min(new_start, full_end - target_span))
+        new_end = new_start + target_span
+
+        if target_span >= full_span:
+            self._view_start = None
+            self._view_end = None
+        else:
+            self._view_start = new_start
+            self._view_end = new_end
+        self.update()
+        return True
+
+    def wheelEvent(self, event) -> None:  # noqa: N802
+        if self._apply_zoom(event.angleDelta().y(), event.position().x()):
+            event.accept()
+            return
+        event.ignore()
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+        if self._view_start is not None or self._view_end is not None:
+            self._view_start = None
+            self._view_end = None
+            self.update()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
     def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)
@@ -452,17 +568,12 @@ class TimelineChartWidget(QWidget):
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "暂无时间线数据")
             return
 
-        span_start = min(start for start, _end, _event in segments)
-        span_end = max(end for _start, end, _event in segments)
-        if span_end <= span_start:
-            span_end = span_start + 1
-
-        left = 54
-        right = 28
-        top = 34
-        bar_h = 28
-        width = max(120, self.width() - left - right)
-        axis = QRectF(left, top, width, bar_h)
+        span_start, span_end = self._view_bounds(segments)
+        axis = self._axis_rect()
+        left = axis.left()
+        top = axis.top()
+        bar_h = axis.height()
+        width = axis.width()
 
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor("#eef2f8"))
@@ -476,13 +587,19 @@ class TimelineChartWidget(QWidget):
 
         last_end = span_start
         for start, end, item in segments:
-            if start > last_end:
+            if end <= span_start or start >= span_end:
+                continue
+            visible_start = max(start, span_start)
+            visible_end = min(end, span_end)
+            if visible_end <= visible_start:
+                continue
+            if visible_start > last_end:
                 gap_x = left + width * (last_end - span_start) / total_span
-                gap_w = width * (start - last_end) / total_span
+                gap_w = width * (visible_start - last_end) / total_span
                 painter.setBrush(QColor("#f6f8fc"))
                 painter.drawRoundedRect(QRectF(gap_x, top, gap_w, bar_h), 6, 6)
-            x = left + width * (start - span_start) / total_span
-            w = max(2.0, width * (end - start) / total_span)
+            x = left + width * (visible_start - span_start) / total_span
+            w = max(2.0, width * (visible_end - visible_start) / total_span)
             primary = _category_primary(item.get("category"))
             color = _category_color(primary)
             painter.setBrush(color)
@@ -492,10 +609,10 @@ class TimelineChartWidget(QWidget):
                 painter.setPen(QColor("#ffffff"))
                 painter.drawText(QRectF(x + 5, top, w - 10, bar_h), Qt.AlignmentFlag.AlignCenter, label)
                 painter.setPen(Qt.PenStyle.NoPen)
-            last_end = max(last_end, end)
+            last_end = max(last_end, visible_end)
 
         painter.setPen(QColor("#667085"))
-        painter.drawText(8, top + 18, "时间")
+        painter.drawText(QRectF(8, top, left - 12, bar_h), Qt.AlignmentFlag.AlignVCenter, "时间")
         start_label = f"{span_start // 60:02d}:{span_start % 60:02d}"
         end_label = f"{span_end // 60:02d}:{span_end % 60:02d}"
         painter.drawText(QRectF(left, top + bar_h + 8, 80, 18), Qt.AlignmentFlag.AlignLeft, start_label)
@@ -1831,6 +1948,7 @@ class MainWindow(QMainWindow):
         self.set_worker_busy(False)
         self.statusBar().showMessage(f"错误：{message}")
         self.result_text.setPlainText(f"识别失败：{message}")
+        self.refresh_visible_data_views()
 
     @Slot(dict)
     def show_result(self, result: dict) -> None:
