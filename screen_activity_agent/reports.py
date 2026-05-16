@@ -7,7 +7,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Iterable
 
-from screen_activity_agent.logs import load_events
+from screen_activity_agent.logs import events_with_effective_ranges, load_events, load_runtime_marks
 from screen_activity_agent.timeutil import local_tz
 
 
@@ -120,7 +120,11 @@ def _top_name(counter: Counter[str]) -> str:
 def _load_event_items(data_dir: Path, start: date, end: date) -> list[EventItem]:
     items: list[EventItem] = []
     for current in _iter_dates(start, end):
-        for raw in load_events(data_dir, current.isoformat()):
+        date_text = current.isoformat()
+        for raw in events_with_effective_ranges(
+            load_events(data_dir, date_text),
+            runtime_marks=load_runtime_marks(data_dir, date_text),
+        ):
             category = raw.get("category")
             if not isinstance(category, list):
                 category = ["未知", "未知"]

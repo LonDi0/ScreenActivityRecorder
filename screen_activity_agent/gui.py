@@ -55,17 +55,20 @@ from screen_activity_agent.logs import (
     category_options,
     export_items_to_csv,
     export_items_to_json,
+    events_with_effective_ranges,
     filter_items_by_category,
     format_day_log,
     format_minutes,
     load_events,
     load_raw_records,
+    load_runtime_marks,
     save_events,
     save_raw_records,
     today_summary,
 )
 from screen_activity_agent.models import ActivityRecord
 from screen_activity_agent.reports import render_report_text
+from screen_activity_agent.timeutil import now_local
 
 
 APP_STYLESHEET = """
@@ -246,7 +249,10 @@ def _category_totals(events: list[dict[str, Any]]) -> Counter[str]:
 
 
 def _summary_for_date(data_dir: Path, date_text: str) -> tuple[int, Counter[str], int]:
-    events = load_events(data_dir, date_text)
+    events = events_with_effective_ranges(
+        load_events(data_dir, date_text),
+        runtime_marks=load_runtime_marks(data_dir, date_text),
+    )
     totals = _category_totals(events)
     return sum(totals.values()), totals, len(events)
 
@@ -282,7 +288,13 @@ def _period_events(data_dir: Path, anchor: date, period: str) -> list[dict[str, 
     start, end = _period_bounds(anchor, period)
     events: list[dict[str, Any]] = []
     for current in _iter_dates(start, end):
-        events.extend(load_events(data_dir, current.isoformat()))
+        date_text = current.isoformat()
+        events.extend(
+            events_with_effective_ranges(
+                load_events(data_dir, date_text),
+                runtime_marks=load_runtime_marks(data_dir, date_text),
+            )
+        )
     return events
 
 
@@ -804,6 +816,17 @@ class AgentWorker(QObject):
         self.is_busy = False
         self.stop_after_current = False
 
+    def _write_runtime_mark(self, action: str) -> None:
+        timestamp = now_local().isoformat()
+        runtime_dir = self.settings.data_dir / "runtime"
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        path = runtime_dir / f"{timestamp[:10]}.jsonl"
+        payload = {"timestamp": timestamp, "action": action}
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        if action in {"pause", "stop"}:
+            self.agent.storage.close_current_event(timestamp)
+
     @Slot()
     def start(self) -> None:
         if not self.settings.is_complete:
@@ -816,6 +839,7 @@ class AgentWorker(QObject):
             self.timer.timeout.connect(self.analyze_once)
         self.is_running = True
         self.stop_after_current = False
+        self._write_runtime_mark("start")
         self.status_ready.emit("运行中")
         self.analyze_once()
         if self.is_running:
@@ -827,6 +851,8 @@ class AgentWorker(QObject):
             self.timer.stop()
         self.is_running = False
         self.stop_after_current = False
+        self._write_runtime_mark("pause")
+        self.agent.memory.clear()
         self.status_ready.emit("已暂停")
 
     @Slot()
@@ -835,6 +861,8 @@ class AgentWorker(QObject):
             self.timer.stop()
         self.is_running = False
         self.stop_after_current = True
+        self._write_runtime_mark("stop")
+        self.agent.memory.clear()
         self.status_ready.emit("已暂停")
 
     @Slot()
@@ -1718,7 +1746,13 @@ class MainWindow(QMainWindow):
         date_text = self.timeline_date.date().toString("yyyy-MM-dd")
         category = self.timeline_category.currentText()
         self._refresh_category_filter(self.timeline_category, date_text)
-        events = filter_items_by_category(load_events(self.settings.data_dir, date_text), category)
+        events = filter_items_by_category(
+            events_with_effective_ranges(
+                load_events(self.settings.data_dir, date_text),
+                runtime_marks=load_runtime_marks(self.settings.data_dir, date_text),
+            ),
+            category,
+        )
         self.timeline_chart.set_events(events)
         self._populate_timeline_table(events)
 
@@ -1750,7 +1784,13 @@ class MainWindow(QMainWindow):
         date_text = self.records_date.date().toString("yyyy-MM-dd")
         self._refresh_category_filter(self.records_category, date_text)
         category = self.records_category.currentText()
-        events = filter_items_by_category(load_events(self.settings.data_dir, date_text), category)
+        events = filter_items_by_category(
+            events_with_effective_ranges(
+                load_events(self.settings.data_dir, date_text),
+                runtime_marks=load_runtime_marks(self.settings.data_dir, date_text),
+            ),
+            category,
+        )
         raw_records = filter_items_by_category(load_raw_records(self.settings.data_dir, date_text), category)
         self._populate_events_table(events)
         self._populate_raw_table(raw_records)
@@ -1848,7 +1888,8 @@ class MainWindow(QMainWindow):
         if selected is None:
             return
         _kind, _row, payload = selected
-        self.record_detail.setPlainText(json.dumps(payload, ensure_ascii=False, indent=2))
+        public_payload = {key: value for key, value in payload.items() if not str(key).startswith("_")}
+        self.record_detail.setPlainText(json.dumps(public_payload, ensure_ascii=False, indent=2))
 
     @Slot()
     def edit_selected_event(self) -> None:
@@ -1859,7 +1900,11 @@ class MainWindow(QMainWindow):
         _kind, _row, selected_event = selected
         date_text = self.records_date.date().toString("yyyy-MM-dd")
         events = load_events(self.settings.data_dir, date_text)
-        event_index = self._find_item_index(events, selected_event)
+        event_index = self._source_index(selected_event)
+        if event_index is not None and not (0 <= event_index < len(events)):
+            event_index = None
+        if event_index is None:
+            event_index = self._find_item_index(events, selected_event)
         if event_index is None:
             QMessageBox.warning(self, "记录不存在", "当前记录已变化，请刷新后再试。")
             return
@@ -1884,7 +1929,11 @@ class MainWindow(QMainWindow):
         date_text = self.records_date.date().toString("yyyy-MM-dd")
         if kind == "events":
             items = load_events(self.settings.data_dir, date_text)
-            index = self._find_item_index(items, payload)
+            index = self._source_index(payload)
+            if index is not None and not (0 <= index < len(items)):
+                index = None
+            if index is None:
+                index = self._find_item_index(items, payload)
             if index is not None:
                 del items[index]
                 save_events(self.settings.data_dir, date_text, items)
@@ -1904,12 +1953,25 @@ class MainWindow(QMainWindow):
                 return index
         return None
 
+    def _source_index(self, item: dict[str, Any]) -> int | None:
+        try:
+            return int(item.get("_source_index"))
+        except (TypeError, ValueError):
+            return None
+
     @Slot()
     def export_records(self, file_type: str) -> None:
         date_text = self.records_date.date().toString("yyyy-MM-dd")
         category = self.records_category.currentText()
         table_is_events = self.records_tabs.currentWidget() is self.events_table
-        items = load_events(self.settings.data_dir, date_text) if table_is_events else load_raw_records(self.settings.data_dir, date_text)
+        items = (
+            events_with_effective_ranges(
+                load_events(self.settings.data_dir, date_text),
+                runtime_marks=load_runtime_marks(self.settings.data_dir, date_text),
+            )
+            if table_is_events
+            else load_raw_records(self.settings.data_dir, date_text)
+        )
         items = filter_items_by_category(items, category)
         if not items:
             QMessageBox.information(self, "没有可导出记录", "当前筛选条件下没有记录。")
@@ -1921,10 +1983,11 @@ class MainWindow(QMainWindow):
         if not path_text:
             return
         path = Path(path_text)
+        public_items = [{key: value for key, value in item.items() if not str(key).startswith("_")} for item in items]
         if file_type == "json":
-            export_items_to_json(path, items)
+            export_items_to_json(path, public_items)
         else:
-            export_items_to_csv(path, items)
+            export_items_to_csv(path, public_items)
         self.statusBar().showMessage(f"记录已导出：{path}")
 
     @Slot(str)

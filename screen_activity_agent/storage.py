@@ -66,11 +66,65 @@ class ActivityStorage:
             data = json.load(handle)
         return data if isinstance(data, list) else []
 
+    def _load_runtime_marks(self, day: str) -> list[dict[str, Any]]:
+        path = self.data_dir / "runtime" / f"{day}.jsonl"
+        if not path.exists():
+            return []
+        marks: list[dict[str, Any]] = []
+        try:
+            lines = path.read_text(encoding="utf-8-sig").splitlines()
+        except OSError:
+            return []
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(item, dict):
+                marks.append(item)
+        return marks
+
+    def _has_runtime_break(self, day: str, start_minute: str, end_minute: str) -> bool:
+        start_ts = parse_iso(local_iso_for_date_minute(day, start_minute))
+        end_ts = parse_iso(local_iso_for_date_minute(day, end_minute))
+        for mark in self._load_runtime_marks(day):
+            action = str(mark.get("action", "")).strip().lower()
+            if action not in {"pause", "stop"}:
+                continue
+            try:
+                mark_ts = parse_iso(str(mark.get("timestamp", "")))
+            except ValueError:
+                continue
+            if start_ts <= mark_ts <= end_ts:
+                return True
+        return False
+
     def _save_events(self, day: str, events: list[dict[str, Any]]) -> None:
         path = self._events_path(day)
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", encoding="utf-8") as handle:
             json.dump(events, handle, ensure_ascii=False, indent=2)
+
+    def close_current_event(self, timestamp: str) -> None:
+        ts = parse_iso(timestamp)
+        day = date_key(ts)
+        events = self._load_events(day)
+        if not events:
+            return
+        current_minute = minute_key(ts)
+        last = events[-1]
+        if last.get("date") != day:
+            return
+        last_start = str(last.get("start", current_minute))
+        current_ts = parse_iso(local_iso_for_date_minute(day, current_minute))
+        last_start_ts = parse_iso(local_iso_for_date_minute(day, last_start))
+        if current_ts < last_start_ts:
+            return
+        last["end"] = current_minute
+        last["duration_minutes"] = self._duration_minutes(day, last_start, current_minute)
+        self._save_events(day, events)
 
     def _merge_event(self, record: ActivityRecord) -> None:
         ts = parse_iso(record.timestamp)
@@ -92,6 +146,19 @@ class ActivityStorage:
             last["duration_minutes"] = self._duration_minutes(last["date"], last["start"], last["end"])
             last["_last_seen"] = record.timestamp
         else:
+            if events:
+                last = events[-1]
+                if last.get("date") == day:
+                    last_end = str(last.get("end", last.get("start", current_minute)))
+                    current_ts = parse_iso(local_iso_for_date_minute(day, current_minute))
+                    last_end_ts = parse_iso(local_iso_for_date_minute(day, last_end))
+                    if (
+                        current_ts >= last_end_ts
+                        and current_ts - last_end_ts <= timedelta(seconds=self.merge_gap_seconds)
+                        and not self._has_runtime_break(day, last_end, current_minute)
+                    ):
+                        last["end"] = current_minute
+                        last["duration_minutes"] = self._duration_minutes(last["date"], last["start"], last["end"])
             events.append(
                 {
                     "date": day,
